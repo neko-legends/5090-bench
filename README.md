@@ -106,5 +106,12 @@ With Inkling-2-Mini reading **6.48 GB/token** (FP8 dense + active NVFP4 experts 
 - `models/<model>/configs/` — reproducible serving env + JSON profile
 - `models/<model>/patches/` — exact `git format-patch` diffs (`0001` shipped; `0002`–`0003` archived rejected experiments)
 - `results/<run>/ledger.jsonl` — raw interleaved benchmark measurements (all 59 runs)
-- `scripts/` — `bench.py`, `ceiling.py`, and `charts/make_charts.py` (regenerates all SVGs + PNGs straight from `ledger.jsonl`)
+- `scripts/` — `bench.py`, `ceiling.py` (from [`sybil-solutions/inference-optimisation-skill`](https://github.com/sybil-solutions/inference-optimisation-skill), MIT), and `charts/make_charts.py` (regenerates all SVGs + PNGs straight from `ledger.jsonl`)
 - `docs/images/` — publication charts (SVG + 1600 px PNG)
+
+## 🙏 Credits & Upstream
+
+- **Hill-climb methodology & harness (`scripts/bench.py`, `scripts/ceiling.py`):** adapted from [`sybil-solutions/inference-optimisation-skill`](https://github.com/sybil-solutions/inference-optimisation-skill) (MIT) — physics-ceiling-first workflow, noise-controlled interleaved A/B benchmarking, and ledger tracking.
+- **Serving engine:** [`satellitedown/inkling-2-mini-abliterated-ingine`](https://github.com/satellitedown/inkling-2-mini-abliterated-ingine) (`ingine`, Blackwell `sm_120a`).
+- **Base model:** [`thinkingmachines/Inkling-2-Mini`](https://huggingface.co/thinkingmachines/Inkling-2-Mini).
+
