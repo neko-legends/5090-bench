@@ -1,0 +1,85 @@
+From c0661c501e487a7efba77d356a9c6e67a1aa664f Mon Sep 17 00:00:00 2001
+From: Eva <eva@eva-core>
+Date: Mon, 23 Nov 2026 23:13:07 -0800
+Subject: [PATCH 3/3] moe_quant: fix MXFP8 block scale clamp (B1) - allow
+ negative ue8m0 exponents
+
+The MXFP8 activation quantizer clamped the block exponent with
+max(0, ceil(log2(amax/448))), forcing scale 2^0 = 1 for any block with
+amax < 448 - i.e. nearly every activation block - so small blocks were
+encoded raw in e4m3 with no scaling (subnormals or flush to zero).
+Measured on the real kernel, 4096 rows x 2304, Gaussian blocks:
+rel L1 error sigma=0.01: 0.061 -> 0.0225; sigma=0.003: 0.204 -> 0.0225;
+sigma=0.001: 0.609 -> 0.0225 (flat MXFP8 floor at every sigma).
+
+Now: e = smallest integer with 2^e >= amax/448, computed exactly via
+frexpf (t-1 when need is exactly a power of two, else t), clamped to
+[-127, 127]; scale via ldexpf; byte stays e + 127, matching the legacy
+decode semantics 2^(ue8m0 - 127) (dequant.cu). No float log2/ceil edge
+rounding and no (int) cast of non-finite values.
+
+NVFP4 path audited for the same class of bug: absent - its per-16 scale
+is ue4m3 (spans small values), and the factor/second-level handling
+matches the legacy decode exactly (e2m1 * ue4m3 * factor, no global
+scale in either path).
+
+Checks re-run with an independent CPU quantizer (O1 fix): mxfp8_check
+and wgemm_cpu_check now quantize on the host (e4m3/e2m1 round-to-nearest
+-even reimplemented, never reading GPU codes back) and assert GPU vs CPU
+byte-for-byte: 0 scale / 0 code mismatches at T=4 and T=300 (was
+288/288 + 9216/9216 mismatches with the old clamp, which the old
+GPU-read-back reference could not see).
+
+Interleaved A/B re-run (fp4b-off1..3 / on1..3): prefill +30.9% (4K),
++27.8% (32K), +21.5% (131K), TTFT 28.6-28.9 -> 23.8-24.1 ms - unchanged
+from the pre-fix numbers; needles 4/4 at 32K and 131K on and off; 20-
+prompt decode panel +2.4% on vs off. Speed and gates unaffected by the
+fix.
+
+Agent: Eva
+---
+ native/src/kernels/prefill/moe_quant.cu | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/native/src/kernels/prefill/moe_quant.cu b/native/src/kernels/prefill/moe_quant.cu
+index 1f3b5af..b4fc843 100644
+--- a/native/src/kernels/prefill/moe_quant.cu
++++ b/native/src/kernels/prefill/moe_quant.cu
+@@ -2,7 +2,8 @@
+ //   nvfp4_quant_rows: x bf16 [rows, K] -> q e2m1 packed nibbles [rows, K/2] (byte c = elements 2c lo,
+ //     2c+1 hi) + s ue4m3 [rows, K/16]; value = e2m1(q) * ue4m3(s), s = amax/6 rounded to ue4m3.
+ //   mxfp8_quant_rows: x bf16 [rows, K] -> q e4m3 [rows, K] + s ue8m0 [rows, K/32]; scale is a power of
+-//     two >= amax/448, value = e4m3(q) * 2^(s-127) (MXFP8: 32-element power-of-two blocks).
++//     two >= amax/448, value = e4m3(q) * 2^(s-127) (MXFP8: 32-element power-of-two blocks; the
++//     ue8m0 byte is e + 127 and spans 2^[-127, 127]).
+ // Both quantize each row's blocks independently; identical rounding on every element of a block.
+ #include "kernels/prefill/common.cuh"
+ #include "kernels/prefill/prefill.h"
+@@ -59,14 +60,19 @@ __global__ void __launch_bounds__(kQThreads) mxfp8_quant_kernel(const __nv_bfloa
+   for (int b = threadIdx.x; b < k_elems / 32; b += kQThreads) {
+     float amax = 0.f;
+     for (int j = 0; j < 32; ++j) amax = fmaxf(amax, fabsf(__bfloat162float(xr[b * 32 + j])));
+-    // smallest power of two >= amax/448; e4m3 max 448
+-    int e = 0;
++    // smallest power of two >= amax/448; e4m3 max 448. ue8m0 spans 2^[-127, 127], so small blocks get
++    // their own scale (byte e + 127, matching the legacy decode's 2^(ue8m0 - 127)). frexpf decomposes
++    // need = m * 2^t with m in [0.5, 1): the smallest e with 2^e >= need is t-1 when need is exactly a
++    // power of two, else t — no float log2/ceil rounding at a power-of-two boundary.
++    int e = -127;
+     if (amax > 0.f) {
+       const float need = amax * (1.f / 448.f);
+-      e = max(0, (int)ceilf(log2f(need)));
+-      e = min(e, 127);
++      int t;
++      const float m = frexpf(need, &t);
++      e = m == 0.5f ? t - 1 : t;
++      e = e < -127 ? -127 : (e > 127 ? 127 : e);
+     }
+-    const float scale = exp2f(float(e));
++    const float scale = ldexpf(1.f, e);
+     const float inv = scale > 0.f ? 1.f / scale : 0.f;
+     sr[b] = static_cast<unsigned char>(e + 127);
+     for (int j = 0; j < 32; ++j) qr[b * 32 + j] = f2e4m3(__bfloat162float(xr[b * 32 + j]) * inv);
+-- 
+2.56.0
+

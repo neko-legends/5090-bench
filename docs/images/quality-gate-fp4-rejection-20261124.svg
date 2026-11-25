@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="920" viewBox="0 0 1600 920">
+<rect width="1600" height="920" fill="#0f141b"/>
+<text x="70" y="68" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="20" font-weight="600" letter-spacing="2">5090-BENCH  ·  QUALITY GATE VERDICT (2026-11-24)</text>
+<text x="70" y="122" fill="#f4f7fa" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="40" font-weight="700">The Speed Trap: Why We Killed the +47% FP4 MoE Kernel</text>
+<text x="70" y="162" fill="#b8c7d9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21">Both configs passed 4/4 needle-in-a-haystack at 131K. Only the real agent role-bench caught the regression.</text>
+<rect x="70" y="190" width="20" height="20" rx="4" fill="#22c55e"/>
+<text x="100" y="207" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="600">Shipped: chunk-6144 lossless (11,154 tok/s @4K)</text>
+<rect x="640" y="190" width="20" height="20" rx="4" fill="#ef4444"/>
+<text x="670" y="207" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="600">Rejected: + FP4 MoE prefill (14,593 tok/s @4K)</text>
+<line x1="360.0" y1="248" x2="360.0" y2="792" stroke="#223042" stroke-width="1"/>
+<text x="360.0" y="820" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">0%</text>
+<line x1="555.0" y1="248" x2="555.0" y2="792" stroke="#223042" stroke-width="1"/>
+<text x="555.0" y="820" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">25%</text>
+<line x1="750.0" y1="248" x2="750.0" y2="792" stroke="#223042" stroke-width="1"/>
+<text x="750.0" y="820" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">50%</text>
+<line x1="945.0" y1="248" x2="945.0" y2="792" stroke="#223042" stroke-width="1"/>
+<text x="945.0" y="820" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">75%</text>
+<line x1="1140.0" y1="248" x2="1140.0" y2="792" stroke="#223042" stroke-width="1"/>
+<text x="1140.0" y="820" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">100%</text>
+<rect x="52" y="254" width="1496" height="122" rx="12" fill="#151d28" stroke="#223042" stroke-width="1"/>
+<text x="74" y="300" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="22" font-weight="700">Builder</text>
+<text x="74" y="328" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="17">(unit tests passed)</text>
+<rect x="360" y="276" width="520.3" height="28" rx="5" fill="#22c55e" fill-opacity="0.9"/>
+<text x="890.3" y="297" fill="#86efac" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">66.7%</text>
+<rect x="360" y="316" width="259.7" height="28" rx="5" fill="#ef4444" fill-opacity="0.88"/>
+<text x="629.7" y="337" fill="#fca5a5" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">33.3% (-33.4%)</text>
+<text x="1526" y="316" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="end">42.0s → 64.5s (2 extra cells looped empty)</text>
+<rect x="52" y="390" width="1496" height="122" rx="12" fill="#151d28" stroke="#223042" stroke-width="1"/>
+<text x="74" y="436" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="22" font-weight="700">Reviewer</text>
+<text x="74" y="464" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="17">(planted bugs found)</text>
+<rect x="360" y="412" width="780.0" height="28" rx="5" fill="#22c55e" fill-opacity="0.9"/>
+<text x="1150.0" y="433" fill="#86efac" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">100.0%</text>
+<rect x="360" y="452" width="520.3" height="28" rx="5" fill="#ef4444" fill-opacity="0.88"/>
+<text x="890.3" y="473" fill="#fca5a5" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">66.7% (-33.3%)</text>
+<text x="1526" y="452" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="end">4.8s → 32.2s (diff3 looped empty)</text>
+<rect x="52" y="526" width="1496" height="122" rx="12" fill="#151d28" stroke="#223042" stroke-width="1"/>
+<text x="74" y="572" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="22" font-weight="700">Instruction Following</text>
+<text x="74" y="600" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="17">(judge score / 5)</text>
+<rect x="360" y="548" width="507.0" height="28" rx="5" fill="#22c55e" fill-opacity="0.9"/>
+<text x="877.0" y="569" fill="#86efac" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">65.0%</text>
+<rect x="360" y="588" width="494.5" height="28" rx="5" fill="#ef4444" fill-opacity="0.88"/>
+<text x="864.5" y="609" fill="#cbd5e1" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">63.4% (-1.6%)</text>
+<text x="1526" y="588" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="end">3.25/5 → 3.17/5 (T3_ops empty in both)</text>
+<rect x="52" y="662" width="1496" height="122" rx="12" fill="#151d28" stroke="#223042" stroke-width="1"/>
+<text x="74" y="708" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="22" font-weight="700">Cheap-Batch</text>
+<text x="74" y="736" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="17">(classification acc)</text>
+<rect x="360" y="684" width="780.0" height="28" rx="5" fill="#22c55e" fill-opacity="0.9"/>
+<text x="1150.0" y="705" fill="#86efac" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">100.0%</text>
+<rect x="360" y="724" width="780.0" height="28" rx="5" fill="#ef4444" fill-opacity="0.88"/>
+<text x="1150.0" y="745" fill="#cbd5e1" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">100.0%</text>
+<text x="1526" y="724" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="end">2.38s → 2.45s (unchanged)</text>
+<rect x="52" y="834" width="1496" height="58" rx="10" fill="#171f2a" stroke="#334155" stroke-width="1"/>
+<text x="76" y="869" fill="#cbd5e1" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="18">Note: 40K Synthesis scored 0% on both (temp-0 looping to 65k cap is a baseline property of Inkling-2-Mini, not caused by FP4). 2 runs/cell, judge: deepseek-v4-flash-0731-fast.</text>
+</svg>

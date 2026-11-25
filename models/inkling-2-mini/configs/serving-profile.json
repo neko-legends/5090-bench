@@ -1,0 +1,29 @@
+{
+  "model": "inkling-2-mini-abliterated",
+  "engine": "ingine (upstream commit 556acc7 + patch 0001)",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5090 (32,607 MiB, sm_120a)",
+    "power_cap_w": 400,
+    "measured_d2d_gb_s": 1525.7,
+    "measured_bf16_tflops": 238.1,
+    "measured_fp8_tflops": 757.8
+  },
+  "serving_flags": [
+    "--engine",
+    "--max-ctx", "262144",
+    "--dense-fp8",
+    "--kv-fp8",
+    "--spec",
+    "--spec-threshold", "0.8"
+  ],
+  "compiled_constants": {
+    "prefill_chunk": 6144,
+    "kAttnMaxTiles": 112
+  },
+  "disabled_experimental_flags": {
+    "INGINE_PREFILL_FP4_MOE": false,
+    "INGINE_PREFILL_FP8_DENSE": false
+  },
+  "vram_used_mib": 26237,
+  "cold_start_s": 4
+}

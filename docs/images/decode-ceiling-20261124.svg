@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="680" viewBox="0 0 1600 680">
+<rect width="1600" height="680" fill="#0f141b"/>
+<text x="70" y="66" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="20" font-weight="600" letter-spacing="2">5090-BENCH  ·  DECODE CEILING &amp; SPECULATIVE SWEEP</text>
+<text x="70" y="118" fill="#f4f7fa" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="38" font-weight="700">Decode Is Already at ~92% of 400 W Physics Ceiling</text>
+<text x="70" y="156" fill="#b8c7d9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="20">Measured D2D bandwidth: 1,525.7 GB/s · per-token read: 6.48 GB · DSpark 7-token drafter (--spec-threshold sweep)</text>
+<rect x="1028.7" y="200" width="133.8" height="372" fill="#f59e0b" fill-opacity="0.10"/>
+<line x1="1162.5" y1="200" x2="1162.5" y2="572" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="6,5"/>
+<text x="1162.5" y="194" fill="#f59e0b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="end">Practical ceiling band (397–473 tok/s)</text>
+<line x1="330.0" y1="212" x2="330.0" y2="572" stroke="#223042" stroke-width="1"/>
+<text x="330.0" y="600" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">0 tok/s</text>
+<line x1="506.0" y1="212" x2="506.0" y2="572" stroke="#223042" stroke-width="1"/>
+<text x="506.0" y="600" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">100 tok/s</text>
+<line x1="682.0" y1="212" x2="682.0" y2="572" stroke="#223042" stroke-width="1"/>
+<text x="682.0" y="600" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">200 tok/s</text>
+<line x1="858.0" y1="212" x2="858.0" y2="572" stroke="#223042" stroke-width="1"/>
+<text x="858.0" y="600" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">300 tok/s</text>
+<line x1="1034.0" y1="212" x2="1034.0" y2="572" stroke="#223042" stroke-width="1"/>
+<text x="1034.0" y="600" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">400 tok/s</text>
+<line x1="1210.0" y1="212" x2="1210.0" y2="572" stroke="#223042" stroke-width="1"/>
+<text x="1210.0" y="600" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">500 tok/s</text>
+<text x="70" y="264" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="600">0.0 (always verify)</text>
+<rect x="330" y="236" width="544.2" height="40" rx="6" fill="#ef4444" fill-opacity="0.9"/>
+<text x="862.2" y="263" fill="#0f141b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700" text-anchor="end">309.2 tok/s</text>
+<text x="1238" y="263" fill="#ef4444" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">−28.5%</text>
+<text x="70" y="354" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="600">0.5</text>
+<rect x="330" y="326" width="695.6" height="40" rx="6" fill="#f59e0b" fill-opacity="0.9"/>
+<text x="1013.6" y="353" fill="#0f141b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700" text-anchor="end">395.2 tok/s</text>
+<text x="1238" y="353" fill="#f59e0b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">−8.7%</text>
+<text x="70" y="444" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="600">0.8 (default · LIVE)</text>
+<rect x="330" y="416" width="759.2" height="40" rx="6" fill="#22c55e" fill-opacity="0.9"/>
+<text x="1077.2" y="443" fill="#0f141b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700" text-anchor="end">431.3 tok/s</text>
+<text x="1238" y="443" fill="#22c55e" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">BEST (~92% ceiling)</text>
+<text x="70" y="534" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="600">0.9</text>
+<rect x="330" y="506" width="747.1" height="40" rx="6" fill="#60a5fa" fill-opacity="0.9"/>
+<text x="1065.1" y="533" fill="#0f141b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700" text-anchor="end">424.5 tok/s</text>
+<text x="1238" y="533" fill="#60a5fa" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19" font-weight="700">−1.4%</text>
+<text x="70" y="644" fill="#7f93a8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="17">Conclusion: default --spec-threshold 0.8 wins every interleaved A/B. No flag-level decode headroom remains at 400 W.</text>
+</svg>

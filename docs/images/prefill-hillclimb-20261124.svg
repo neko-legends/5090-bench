@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1020" viewBox="0 0 1600 1020">
+<rect width="1600" height="1020" fill="#0f141b"/>
+<text x="70" y="68" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="20" font-weight="600" letter-spacing="2">5090-BENCH  ·  PREFILL HILL-CLIMB (59 INTERLEAVED RUNS)</text>
+<text x="70" y="122" fill="#f4f7fa" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="40" font-weight="700">Every Prefill Optimization Tested on RTX 5090</text>
+<text x="70" y="162" fill="#b8c7d9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21">Inkling-2-Mini (abliterated) · ingine · 400 W cap untouched · mean cold prefill tok/s across prompt sizes</text>
+<rect x="70" y="186" width="18" height="18" rx="3" fill="#6fd1f5"/>
+<text x="96" y="202" fill="#d8e3ee" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="18">4K prompt (3,302 tok)</text>
+<rect x="330" y="186" width="18" height="18" rx="3" fill="#7ce09b"/>
+<text x="356" y="202" fill="#d8e3ee" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="18">32K prompt (25,554 tok)</text>
+<rect x="615" y="186" width="18" height="18" rx="3" fill="#a78bfa"/>
+<text x="641" y="202" fill="#d8e3ee" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="18">131K prompt (102,557 tok)</text>
+<line x1="395.0" y1="232" x2="395.0" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="395.0" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">0</text>
+<line x1="531.9" y1="232" x2="531.9" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="531.9" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">2,000</text>
+<line x1="668.8" y1="232" x2="668.8" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="668.8" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">4,000</text>
+<line x1="805.6" y1="232" x2="805.6" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="805.6" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">6,000</text>
+<line x1="942.5" y1="232" x2="942.5" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="942.5" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">8,000</text>
+<line x1="1079.4" y1="232" x2="1079.4" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="1079.4" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">10,000</text>
+<line x1="1216.2" y1="232" x2="1216.2" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="1216.2" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">12,000</text>
+<line x1="1353.1" y1="232" x2="1353.1" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="1353.1" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">14,000</text>
+<line x1="1490.0" y1="232" x2="1490.0" y2="932" stroke="#223042" stroke-width="1"/>
+<text x="1490.0" y="960" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="16" text-anchor="middle">16,000</text>
+<line x1="1310.3" y1="222" x2="1310.3" y2="932" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="7,5"/>
+<text x="1302.3" y="216" fill="#f59e0b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" text-anchor="end">BF16 50% MFU 4K ref (13,374)</text>
+<rect x="52" y="236" width="1496" height="92" rx="10" fill="#151d28" stroke="#202c3c" stroke-width="1"/>
+<text x="72" y="274" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700">MoE tile rows = 32</text>
+<rect x="72" y="286" width="268" height="24" rx="5" fill="#64748b" fill-opacity="0.22" stroke="#64748b" stroke-width="1"/>
+<text x="206" y="303" fill="#64748b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="13" font-weight="700" text-anchor="middle">REJECT (−22%)</text>
+<rect x="395" y="247" width="591.2" height="20" rx="4" fill="#6fd1f5" fill-opacity="0.9"/>
+<text x="994.2" y="262" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">8,639</text>
+<rect x="395" y="273" width="578.9" height="20" rx="4" fill="#7ce09b" fill-opacity="0.9"/>
+<text x="981.9" y="288" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">8,459</text>
+<rect x="395" y="299" width="498.3" height="20" rx="4" fill="#a78bfa" fill-opacity="0.9"/>
+<text x="901.3" y="314" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">7,281</text>
+<rect x="52" y="336" width="1496" height="92" rx="10" fill="#151d28" stroke="#202c3c" stroke-width="1"/>
+<text x="72" y="374" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700">Stock (chunk 3072)</text>
+<rect x="72" y="386" width="268" height="24" rx="5" fill="#94a3b8" fill-opacity="0.22" stroke="#94a3b8" stroke-width="1"/>
+<text x="206" y="403" fill="#94a3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="13" font-weight="700" text-anchor="middle">BASELINE</text>
+<rect x="395" y="347" width="681.3" height="20" rx="4" fill="#6fd1f5" fill-opacity="0.9"/>
+<text x="1084.3" y="362" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">9,955</text>
+<rect x="395" y="373" width="728.5" height="20" rx="4" fill="#7ce09b" fill-opacity="0.9"/>
+<text x="1131.5" y="388" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">10,644</text>
+<rect x="395" y="399" width="591.8" height="20" rx="4" fill="#a78bfa" fill-opacity="0.9"/>
+<text x="994.8" y="414" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">8,648</text>
+<rect x="52" y="436" width="1496" height="92" rx="10" fill="#151d28" stroke="#202c3c" stroke-width="1"/>
+<text x="72" y="474" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700">chunk 4096 / tiles 80</text>
+<rect x="72" y="486" width="268" height="24" rx="5" fill="#60a5fa" fill-opacity="0.22" stroke="#60a5fa" stroke-width="1"/>
+<text x="206" y="503" fill="#60a5fa" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="13" font-weight="700" text-anchor="middle">SUPERSEDED</text>
+<rect x="395" y="447" width="760.4" height="20" rx="4" fill="#6fd1f5" fill-opacity="0.9"/>
+<text x="1163.4" y="462" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">11,111</text>
+<rect x="395" y="473" width="735.4" height="20" rx="4" fill="#7ce09b" fill-opacity="0.9"/>
+<text x="1138.4" y="488" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">10,746</text>
+<rect x="395" y="499" width="602.7" height="20" rx="4" fill="#a78bfa" fill-opacity="0.9"/>
+<text x="1005.7" y="514" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">8,807</text>
+<rect x="52" y="536" width="1496" height="92" rx="10" fill="#151d28" stroke="#202c3c" stroke-width="1"/>
+<text x="72" y="574" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700">chunk 8192 / tiles 144</text>
+<rect x="72" y="586" width="268" height="24" rx="5" fill="#64748b" fill-opacity="0.22" stroke="#64748b" stroke-width="1"/>
+<text x="206" y="603" fill="#64748b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="13" font-weight="700" text-anchor="middle">REJECT (+724 MiB)</text>
+<rect x="395" y="547" width="762.1" height="20" rx="4" fill="#6fd1f5" fill-opacity="0.9"/>
+<text x="1165.1" y="562" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">11,136</text>
+<rect x="395" y="573" width="748.1" height="20" rx="4" fill="#7ce09b" fill-opacity="0.9"/>
+<text x="1151.1" y="588" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">10,931</text>
+<rect x="395" y="599" width="614.1" height="20" rx="4" fill="#a78bfa" fill-opacity="0.9"/>
+<text x="1017.1" y="614" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">8,973</text>
+<rect x="52" y="636" width="1496" height="92" rx="10" fill="#13261e" stroke="#22c55e" stroke-width="1.5"/>
+<text x="72" y="674" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700">chunk 6144 / tiles 112</text>
+<rect x="72" y="686" width="268" height="24" rx="5" fill="#22c55e" fill-opacity="0.22" stroke="#22c55e" stroke-width="1"/>
+<text x="206" y="703" fill="#22c55e" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="13" font-weight="700" text-anchor="middle">SHIPPED · LOSSLESS</text>
+<rect x="395" y="647" width="763.4" height="20" rx="4" fill="#6fd1f5" fill-opacity="0.9"/>
+<text x="1166.4" y="662" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">11,154</text>
+<rect x="395" y="673" width="746.7" height="20" rx="4" fill="#7ce09b" fill-opacity="0.9"/>
+<text x="1149.7" y="688" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">10,911</text>
+<rect x="395" y="699" width="619.3" height="20" rx="4" fill="#a78bfa" fill-opacity="0.9"/>
+<text x="1022.3" y="714" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">9,049</text>
+<rect x="52" y="736" width="1496" height="92" rx="10" fill="#151d28" stroke="#202c3c" stroke-width="1"/>
+<text x="72" y="774" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700">+ FP8 dense prefill</text>
+<rect x="72" y="786" width="268" height="24" rx="5" fill="#f59e0b" fill-opacity="0.22" stroke="#f59e0b" stroke-width="1"/>
+<text x="206" y="803" fill="#f59e0b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="13" font-weight="700" text-anchor="middle">OFF (lossy, −3.8% c1)</text>
+<rect x="395" y="747" width="796.2" height="20" rx="4" fill="#6fd1f5" fill-opacity="0.9"/>
+<text x="1199.2" y="762" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">11,635</text>
+<rect x="395" y="773" width="790.3" height="20" rx="4" fill="#7ce09b" fill-opacity="0.9"/>
+<text x="1193.3" y="788" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">11,547</text>
+<rect x="395" y="799" width="650.1" height="20" rx="4" fill="#a78bfa" fill-opacity="0.9"/>
+<text x="1053.1" y="814" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">9,499</text>
+<rect x="52" y="836" width="1496" height="92" rx="10" fill="#27161a" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="5,4"/>
+<text x="72" y="874" fill="#f1f5f9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700">+ FP4 MoE prefill</text>
+<rect x="72" y="886" width="268" height="24" rx="5" fill="#ef4444" fill-opacity="0.22" stroke="#ef4444" stroke-width="1"/>
+<text x="206" y="903" fill="#ef4444" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="13" font-weight="700" text-anchor="middle">REJECTED ON QUALITY</text>
+<rect x="395" y="847" width="998.7" height="20" rx="4" fill="#6fd1f5" fill-opacity="0.9"/>
+<text x="1401.7" y="862" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">14,593</text>
+<rect x="395" y="873" width="952.5" height="20" rx="4" fill="#7ce09b" fill-opacity="0.9"/>
+<text x="1355.5" y="888" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">13,918</text>
+<rect x="395" y="899" width="751.1" height="20" rx="4" fill="#a78bfa" fill-opacity="0.9"/>
+<text x="1154.1" y="914" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="15" font-weight="600">10,974</text>
+<text x="70" y="990" fill="#7f93a8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="17">FP4 MoE crosses the BF16 MFU reference because it uses native Blackwell mxf4nvf4/mxf8f6f4 tensor cores — but failed real task quality (see quality chart).</text>
+</svg>

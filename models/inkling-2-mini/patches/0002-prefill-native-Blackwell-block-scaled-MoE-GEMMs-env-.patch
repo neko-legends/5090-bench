@@ -1,0 +1,1147 @@
+From 1faae5f9c70282476d99fdd7e145e9a00cbed53f Mon Sep 17 00:00:00 2001
+From: Eva <eva@eva-core>
+Date: Mon, 23 Nov 2026 21:38:56 -0800
+Subject: [PATCH 2/3] prefill: native Blackwell block-scaled MoE GEMMs +
+ env-gated FP8 dense projections
+
+MoE grouped GEMMs (wgemm.cu): optional native path (MoeAct a.q/a.s, dispatched
+when set) feeding the checkpoint's own NVFP4/MXFP8 codes and block scales
+straight into sm_120a tensor cores - mxf4nvf4 m16n8k64 ue4m3 for layers 0-19,
+mxf8f6f4 m16n8k32 ue8m0 for layers 20-23 - with per-row dynamic activation
+quantization (moe_quant.cu) and the per-expert factor applied to the FP32
+accumulator. BF16 legacy path unchanged in the same binary.
+
+Measured (interleaved, same binary, INGINE_PREFILL_FP4_MOE): 4K +31.1%,
+32K +27.6%, 131K +21.3% prefill tok/s; TTFT -16%; needles 4/4 at 32K and
+131K with identical retrieved codes; greedy output changes (lossy activation
+quantization). 20-prompt decode panel: no systematic regression.
+
+Dense wproj/wo FP8 path (gemm.cpp run_fp8 + gemm_fp8.cu): per-row E4M3
+activation quant + checkpoint FP8 rows into cuBLASLt E4M3xE4M3 with a
+row x column scale epilogue, gated by INGINE_PREFILL_FP8_DENSE. +4-5%
+prefill, rejected as default (fixed-panel decode -3.8%, greedy drift);
+kept for a future retest.
+
+Verified by standalone tests: /tmp/e3/{nvfp4_mma_test,wgemm_cpu_check,
+mxfp8_check,wgemm_native_test}.cu - exact-semantics CPU references, 0
+mismatches across formats, GEMMs and T=4..600.
+---
+ native/src/kernels/prefill/CMakeLists.txt |   2 +
+ native/src/kernels/prefill/common.cuh     |   6 +
+ native/src/kernels/prefill/gemm.cpp       |  99 ++++-
+ native/src/kernels/prefill/gemm_fp8.cu    |  80 ++++
+ native/src/kernels/prefill/moe_quant.cu   |  92 +++++
+ native/src/kernels/prefill/wgemm.cu       | 454 +++++++++++++++-------
+ native/src/model/prefill.cpp              |  97 ++++-
+ native/src/model/prefill.h                |   4 +
+ 8 files changed, 682 insertions(+), 152 deletions(-)
+ create mode 100644 native/src/kernels/prefill/gemm_fp8.cu
+ create mode 100644 native/src/kernels/prefill/moe_quant.cu
+
+diff --git a/native/src/kernels/prefill/CMakeLists.txt b/native/src/kernels/prefill/CMakeLists.txt
+index 8ac7622..400ae35 100644
+--- a/native/src/kernels/prefill/CMakeLists.txt
++++ b/native/src/kernels/prefill/CMakeLists.txt
+@@ -4,6 +4,8 @@ add_library(ingine_kernels_prefill STATIC
+   wgemm.cu
+   rows.cu
+   gemm.cpp
++  gemm_fp8.cu
++  moe_quant.cu
+ )
+ ingine_cuda_target(ingine_kernels_prefill)
+ ingine_internal_includes(ingine_kernels_prefill)
+diff --git a/native/src/kernels/prefill/common.cuh b/native/src/kernels/prefill/common.cuh
+index 713b52f..9f2dd23 100644
+--- a/native/src/kernels/prefill/common.cuh
++++ b/native/src/kernels/prefill/common.cuh
+@@ -5,6 +5,7 @@
+ 
+ #include <cuda_bf16.h>
+ #include <cuda_fp16.h>
++#include <cuda_fp4.h>
+ #include <cuda_fp8.h>
+ #include <cuda_runtime.h>
+ 
+@@ -95,6 +96,11 @@ __device__ __forceinline__ uint8_t f2e4m3(float x) {
+   return static_cast<uint8_t>(__nv_cvt_float_to_fp8(fminf(fmaxf(x, -448.f), 448.f), __NV_SATFINITE, __NV_E4M3));
+ }
+ 
++// float -> E2M1 code, round to nearest even after saturating to +-6 (torch .to(float4_e2m1fn_x2)).
++__device__ __forceinline__ uint8_t f2e2m1(float x) {
++  return static_cast<uint8_t>(__nv_cvt_float_to_fp4(fminf(fmaxf(x, -6.f), 6.f), __NV_E2M1, cudaRoundNearest));
++}
++
+ // Swizzled [rows][Chunks x 16 B] tile: element offset (in 16-bit units) of 16-byte chunk `chunk` of `row`.
+ // XOR with row & 7 spreads the 8 rows of an ldmatrix 8x8 matrix over distinct banks.
+ template <int Chunks>
+diff --git a/native/src/kernels/prefill/gemm.cpp b/native/src/kernels/prefill/gemm.cpp
+index 8e2a38c..cf02728 100644
+--- a/native/src/kernels/prefill/gemm.cpp
++++ b/native/src/kernels/prefill/gemm.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <cublasLt.h>
+ 
++#include <cstdint>
+ #include <map>
+ #include <stdexcept>
+ #include <string>
+@@ -28,8 +29,13 @@ constexpr std::size_t kWorkspaceBytes = 32u << 20;
+ struct Gemm::Impl {
+   cublasLtHandle_t handle = nullptr;
+   void* workspace = nullptr;
+-  // (M, N, K, lda, ldb, ldc, fp32 output) -> algorithm
+-  std::map<std::tuple<int, int, int, int, int, int, bool>, cublasLtMatmulAlgo_t> algos;
++  // (M, N, K, lda, ldb, ldc, fp32 output, fp8 inputs) -> algorithm
++  std::map<std::tuple<int, int, int, int, int, int, bool, bool>, cublasLtMatmulAlgo_t> algos;
++  // run_fp8 scratch, grown to the largest call
++  std::uint8_t* aq = nullptr;      // [M, K] E4M3
++  float* act_scale = nullptr;      // [M]
++  float* one = nullptr;            // device 1.0f (per-tensor scales of the FP8 matmul)
++  std::size_t aq_bytes = 0, scale_bytes = 0;
+ };
+ 
+ Gemm::Gemm() : impl_(new Impl) {
+@@ -72,7 +78,7 @@ void Gemm::run(const __nv_bfloat16* A, int lda, const __nv_bfloat16* B, int ldb,
+     cublas_check(cublasLtMatrixLayoutCreate(&lb, CUDA_R_16BF, K, M, lda), "layout b");
+     cublas_check(cublasLtMatrixLayoutCreate(&lc, c_fp32 ? CUDA_R_32F : CUDA_R_16BF, N, M, ldc), "layout c");
+ 
+-    const auto key = std::make_tuple(M, N, K, lda, ldb, ldc, c_fp32);
++    const auto key = std::make_tuple(M, N, K, lda, ldb, ldc, c_fp32, false);
+     auto it = impl_->algos.find(key);
+     if (it == impl_->algos.end()) {
+       cublasLtMatmulPreference_t pref = nullptr;
+@@ -104,4 +110,91 @@ void Gemm::run(const __nv_bfloat16* A, int lda, const __nv_bfloat16* B, int ldb,
+   cleanup();
+ }
+ 
++void Gemm::run_fp8(const __nv_bfloat16* A, int lda, const void* Wq, const float* w_scale, int ldw, float* c32,
++                   int ldc32, __nv_bfloat16* C, int ldc, int M, int N, int K, cudaStream_t stream) {
++  if (M <= 0 || N <= 0 || K <= 0) throw std::invalid_argument("prefill Gemm fp8: empty shape");
++  auto ensure_scratch = [&] {
++    const std::size_t aq_need = std::size_t(M) * K;
++    if (impl_->aq_bytes < aq_need) {
++      if (impl_->aq) cudaFree(impl_->aq);
++      if (cudaMalloc(&impl_->aq, aq_need) != cudaSuccess)
++        throw std::runtime_error("prefill Gemm fp8: aq alloc failed");
++      impl_->aq_bytes = aq_need;
++    }
++    const std::size_t scale_need = std::size_t(M) * sizeof(float);
++    if (impl_->scale_bytes < scale_need) {
++      if (impl_->act_scale) cudaFree(impl_->act_scale);
++      if (cudaMalloc(&impl_->act_scale, scale_need) != cudaSuccess)
++        throw std::runtime_error("prefill Gemm fp8: act_scale alloc failed");
++      impl_->scale_bytes = scale_need;
++    }
++    if (!impl_->one) {
++      const float one = 1.f;
++      if (cudaMalloc(&impl_->one, sizeof(float)) != cudaSuccess ||
++          cudaMemcpy(impl_->one, &one, sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess)
++        throw std::runtime_error("prefill Gemm fp8: one alloc failed");
++    }
++  };
++  ensure_scratch();
++  fp8_quant_rows(A, lda, M, K, impl_->aq, impl_->act_scale, stream);
++
++  cublasLtMatmulDesc_t op = nullptr;
++  cublasLtMatrixLayout_t lw = nullptr, la = nullptr, lc = nullptr;
++  auto cleanup = [&] {
++    if (lw) cublasLtMatrixLayoutDestroy(lw);
++    if (la) cublasLtMatrixLayoutDestroy(la);
++    if (lc) cublasLtMatrixLayoutDestroy(lc);
++    if (op) cublasLtMatmulDescDestroy(op);
++  };
++  try {
++    cublas_check(cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, CUDA_R_32F), "desc create");
++    const cublasOperation_t tw = CUBLAS_OP_T, ta = CUBLAS_OP_N;
++    cublas_check(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &tw, sizeof(tw)), "transa");
++    cublas_check(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &ta, sizeof(ta)), "transb");
++    // per-tensor scaling, both scales 1: the per-row activation and weight scales are applied by the epilogue
++    cublas_check(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &impl_->one,
++                                                sizeof(impl_->one)),
++                 "a scale");
++    cublas_check(cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &impl_->one,
++                                                sizeof(impl_->one)),
++                 "b scale");
++    // column-major K x N of the row-major E4M3 weight rows [N, ldw], op T
++    cublas_check(cublasLtMatrixLayoutCreate(&lw, CUDA_R_8F_E4M3, K, N, ldw), "layout w");
++    // column-major K x M of the compact row-major E4M3 activations [M, K]
++    cublas_check(cublasLtMatrixLayoutCreate(&la, CUDA_R_8F_E4M3, K, M, K), "layout a");
++    cublas_check(cublasLtMatrixLayoutCreate(&lc, CUDA_R_32F, N, M, ldc32), "layout c");
++
++    const auto key = std::make_tuple(M, N, K, ldw, K, ldc32, true, true);
++    auto it = impl_->algos.find(key);
++    if (it == impl_->algos.end()) {
++      cublasLtMatmulPreference_t pref = nullptr;
++      cublas_check(cublasLtMatmulPreferenceCreate(&pref), "preference create");
++      const std::size_t ws = kWorkspaceBytes;
++      const std::uint32_t reduction = CUBLASLT_REDUCTION_SCHEME_COMPUTE_TYPE;
++      cublasStatus_t st =
++          cublasLtMatmulPreferenceSetAttribute(pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &ws, sizeof(ws));
++      if (st == CUBLAS_STATUS_SUCCESS)
++        st = cublasLtMatmulPreferenceSetAttribute(pref, CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &reduction,
++                                                  sizeof(reduction));
++      cublasLtMatmulHeuristicResult_t result{};
++      int found = 0;
++      if (st == CUBLAS_STATUS_SUCCESS)
++        st = cublasLtMatmulAlgoGetHeuristic(impl_->handle, op, lw, la, lc, lc, pref, 1, &result, &found);
++      cublasLtMatmulPreferenceDestroy(pref);
++      cublas_check(st, "heuristic");
++      if (found == 0) throw std::runtime_error("prefill Gemm fp8: no cuBLASLt algorithm (E4M3xE4M3 -> f32)");
++      it = impl_->algos.emplace(key, result.algo).first;
++    }
++    const float alpha = 1.f, beta = 0.f;
++    cublas_check(cublasLtMatmul(impl_->handle, op, &alpha, static_cast<const void*>(Wq), lw, impl_->aq, la, &beta,
++                                c32, lc, c32, lc, &it->second, impl_->workspace, kWorkspaceBytes, stream),
++                 "matmul fp8");
++  } catch (...) {
++    cleanup();
++    throw;
++  }
++  cleanup();
++  fp8_apply_scales(c32, ldc32, impl_->act_scale, w_scale, M, N, C, ldc, stream);
++}
++
+ }  // namespace ingine::kernels::prefill
+diff --git a/native/src/kernels/prefill/gemm_fp8.cu b/native/src/kernels/prefill/gemm_fp8.cu
+new file mode 100644
+index 0000000..b6d8c83
+--- /dev/null
++++ b/native/src/kernels/prefill/gemm_fp8.cu
+@@ -0,0 +1,80 @@
++// FP8 prefill projection kernels: per-row activation quantization to E4M3 and the row x column scale
++// epilogue of the cuBLASLt E4M3 x E4M3 GEMM (Gemm::run_fp8 in gemm.cpp).
++//   aq[m, k] = e4m3(A[m, k] * 448 / amax(m)), act_scale[m] = amax(m) / 448  (amax clamped at 1e-30)
++// so aq * act_scale == A exactly for every representable pair (torch clamp + .to(float8_e4m3fn) rounding).
++//   C[m, n] = bf16(c32[m, n] * act_scale[m] * w_scale[n])
++#include "kernels/prefill/common.cuh"
++#include "kernels/prefill/prefill.h"
++
++#include <stdexcept>
++#include <cstdint>
++
++namespace ingine::kernels::prefill {
++namespace {
++
++constexpr int kQuantThreads = 256;
++
++__global__ void __launch_bounds__(kQuantThreads) quant_rows_kernel(const __nv_bfloat16* __restrict__ a,
++                                                                   int lda, int k_elems, uint8_t* __restrict__ aq,
++                                                                   float* __restrict__ act_scale) {
++  const std::size_t m = blockIdx.x;
++  const __nv_bfloat16* row = a + m * std::size_t(lda);
++  float amax = 0.f;
++  for (int k = threadIdx.x; k < k_elems; k += kQuantThreads)
++    amax = fmaxf(amax, fabsf(__bfloat162float(row[k])));
++#pragma unroll
++  for (int off = 16; off > 0; off >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, off));
++  __shared__ float warp_max[kQuantThreads / 32];
++  const int warp = threadIdx.x >> 5;
++  if ((threadIdx.x & 31) == 0) warp_max[warp] = amax;
++  __syncthreads();
++  if (warp == 0) {
++    amax = (threadIdx.x < kQuantThreads / 32) ? warp_max[threadIdx.x] : 0.f;
++#pragma unroll
++    for (int off = 16; off > 0; off >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, off));
++    if (threadIdx.x == 0) {
++      const float clamped = fmaxf(amax, 1e-30f);
++      act_scale[m] = clamped * (1.f / 448.f);
++      warp_max[0] = 448.f / clamped;  // multiplier, published to the whole block
++    }
++  }
++  __syncthreads();
++  const float mul = warp_max[0];
++  uint8_t* out = aq + m * std::size_t(k_elems);
++  for (int k = threadIdx.x; k < k_elems; k += kQuantThreads)
++    out[k] = f2e4m3(__bfloat162float(row[k]) * mul);
++}
++
++constexpr int kScaleThreads = 256;
++
++__global__ void __launch_bounds__(kScaleThreads) apply_scales_kernel(const float* __restrict__ c32, int ldc32,
++                                                                     const float* __restrict__ act_scale,
++                                                                     const float* __restrict__ w_scale, int m_rows,
++                                                                     int n_cols, __nv_bfloat16* __restrict__ c,
++                                                                     int ldc) {
++  const int n = blockIdx.x * kScaleThreads + threadIdx.x;
++  if (n >= n_cols) return;
++  const float ws = __ldg(w_scale + n);
++  for (int m = blockIdx.y; m < m_rows; m += gridDim.y) {
++    const float v = __ldg(c32 + std::size_t(m) * ldc32 + n) * __ldg(act_scale + m) * ws;
++    c[std::size_t(m) * ldc + n] = __float2bfloat16_rn(v);
++  }
++}
++
++}  // namespace
++
++void fp8_quant_rows(const __nv_bfloat16* a, int lda, int m_rows, int k_elems, uint8_t* aq, float* act_scale,
++                    cudaStream_t stream) {
++  if (m_rows < 1 || k_elems < 1) throw std::invalid_argument("fp8_quant_rows: empty shape");
++  quant_rows_kernel<<<m_rows, kQuantThreads, 0, stream>>>(
++      a, lda, k_elems, aq, act_scale);
++}
++
++void fp8_apply_scales(const float* c32, int ldc32, const float* act_scale, const float* w_scale, int m_rows,
++                      int n_cols, __nv_bfloat16* c, int ldc, cudaStream_t stream) {
++  if (m_rows < 1 || n_cols < 1) throw std::invalid_argument("fp8_apply_scales: empty shape");
++  const dim3 grid((n_cols + kScaleThreads - 1) / kScaleThreads, std::min(m_rows, 65535));
++  apply_scales_kernel<<<grid, kScaleThreads, 0, stream>>>(c32, ldc32, act_scale, w_scale, m_rows, n_cols, c, ldc);
++}
++
++}  // namespace ingine::kernels::prefill
+diff --git a/native/src/kernels/prefill/moe_quant.cu b/native/src/kernels/prefill/moe_quant.cu
+new file mode 100644
+index 0000000..1f3b5af
+--- /dev/null
++++ b/native/src/kernels/prefill/moe_quant.cu
+@@ -0,0 +1,92 @@
++// Dynamic block-scaled quantizers for the native Blackwell MoE grouped GEMM (wgemm.cu):
++//   nvfp4_quant_rows: x bf16 [rows, K] -> q e2m1 packed nibbles [rows, K/2] (byte c = elements 2c lo,
++//     2c+1 hi) + s ue4m3 [rows, K/16]; value = e2m1(q) * ue4m3(s), s = amax/6 rounded to ue4m3.
++//   mxfp8_quant_rows: x bf16 [rows, K] -> q e4m3 [rows, K] + s ue8m0 [rows, K/32]; scale is a power of
++//     two >= amax/448, value = e4m3(q) * 2^(s-127) (MXFP8: 32-element power-of-two blocks).
++// Both quantize each row's blocks independently; identical rounding on every element of a block.
++#include "kernels/prefill/common.cuh"
++#include "kernels/prefill/prefill.h"
++
++#include <stdexcept>
++#include <cstdint>
++
++namespace ingine::kernels::prefill {
++namespace {
++
++constexpr int kQThreads = 256;
++
++// ---- NVFP4: one block per row, 16-element blocks, thread t handles blocks t, t + 256, ...
++__global__ void __launch_bounds__(kQThreads) nvfp4_quant_kernel(const __nv_bfloat16* __restrict__ x, int k_elems,
++                                                                 unsigned char* __restrict__ q,
++                                                                 unsigned char* __restrict__ s) {
++  const std::size_t row = blockIdx.x;
++  const __nv_bfloat16* xr = x + row * std::size_t(k_elems);
++  unsigned char* qr = q + row * std::size_t(k_elems / 2);
++  unsigned char* sr = s + row * std::size_t(k_elems / 16);
++  for (int b = threadIdx.x; b < k_elems / 16; b += kQThreads) {
++    float v[16];
++    float amax = 0.f;
++#pragma unroll
++    for (int j = 0; j < 16; ++j) {
++      v[j] = __bfloat162float(xr[b * 16 + j]);
++      amax = fmaxf(amax, fabsf(v[j]));
++    }
++    // scale = amax/6 rounded to ue4m3; quantize against the rounded scale, saturating at +-6
++    const unsigned char s8 = f2e4m3(amax * (1.f / 6.f));
++    const float2 sf = e4m3x2_to_float2(uint16_t(s8));  // s8 is nonnegative: exact in the low half
++    const float scale = sf.x;
++    const float inv = scale > 0.f ? 1.f / scale : 0.f;
++    unsigned char codes[8] = {};
++#pragma unroll
++    for (int j = 0; j < 16; ++j) {
++      const float w = fminf(fmaxf(v[j] * inv, -6.f), 6.f);
++      codes[j >> 1] |= static_cast<unsigned char>(f2e2m1(w) << ((j & 1) * 4));
++    }
++    sr[b] = s8;
++#pragma unroll
++    for (int c = 0; c < 8; ++c) qr[b * 8 + c] = codes[c];
++  }
++}
++
++// ---- MXFP8: one block per row, 32-element blocks
++__global__ void __launch_bounds__(kQThreads) mxfp8_quant_kernel(const __nv_bfloat16* __restrict__ x, int k_elems,
++                                                                 unsigned char* __restrict__ q,
++                                                                 unsigned char* __restrict__ s) {
++  const std::size_t row = blockIdx.x;
++  const __nv_bfloat16* xr = x + row * std::size_t(k_elems);
++  unsigned char* qr = q + row * std::size_t(k_elems);
++  unsigned char* sr = s + row * std::size_t(k_elems / 32);
++  for (int b = threadIdx.x; b < k_elems / 32; b += kQThreads) {
++    float amax = 0.f;
++    for (int j = 0; j < 32; ++j) amax = fmaxf(amax, fabsf(__bfloat162float(xr[b * 32 + j])));
++    // smallest power of two >= amax/448; e4m3 max 448
++    int e = 0;
++    if (amax > 0.f) {
++      const float need = amax * (1.f / 448.f);
++      e = max(0, (int)ceilf(log2f(need)));
++      e = min(e, 127);
++    }
++    const float scale = exp2f(float(e));
++    const float inv = scale > 0.f ? 1.f / scale : 0.f;
++    sr[b] = static_cast<unsigned char>(e + 127);
++    for (int j = 0; j < 32; ++j) qr[b * 32 + j] = f2e4m3(__bfloat162float(xr[b * 32 + j]) * inv);
++  }
++}
++
++}  // namespace
++
++void nvfp4_quant_rows(const __nv_bfloat16* x, int rows, int k_elems, unsigned char* q, unsigned char* s,
++                      cudaStream_t stream) {
++  if (rows < 1 || k_elems < 16 || k_elems % 16 != 0)
++    throw std::invalid_argument("nvfp4_quant_rows: K must be a positive multiple of 16");
++  nvfp4_quant_kernel<<<rows, kQThreads, 0, stream>>>(x, k_elems, q, s);
++}
++
++void mxfp8_quant_rows(const __nv_bfloat16* x, int rows, int k_elems, unsigned char* q, unsigned char* s,
++                      cudaStream_t stream) {
++  if (rows < 1 || k_elems < 32 || k_elems % 32 != 0)
++    throw std::invalid_argument("mxfp8_quant_rows: K must be a positive multiple of 32");
++  mxfp8_quant_kernel<<<rows, kQThreads, 0, stream>>>(x, k_elems, q, s);
++}
++
++}  // namespace ingine::kernels::prefill
+diff --git a/native/src/kernels/prefill/wgemm.cu b/native/src/kernels/prefill/wgemm.cu
+index 52d90c1..8bd37fc 100644
+--- a/native/src/kernels/prefill/wgemm.cu
++++ b/native/src/kernels/prefill/wgemm.cu
+@@ -1,20 +1,25 @@
+-// Grouped expert GEMMs of the prefill (model._moe_grouped) over NVFP4 / MXFP8 experts decoded on the fly.
++// Grouped expert GEMMs of the prefill (model._moe_grouped) over NVFP4 / MXFP8 experts.
+ //
+-// Design. A CTA computes up to 128 activation rows x 128 weight rows, K in steps of 64, mma.m16n8k16 BF16 with
+-// FP32 accumulation. The 8 warps split the weight rows (16 each) and every warp covers all of the tile's
+-// activation rows, so each weight element is decoded exactly once per CTA, straight from the staged checkpoint
+-// codes into the MMA B fragments in registers (no BF16 weight tile in shared memory):
+-//   NVFP4: bf16((e2m1 * e4m3 block scale) * factor)      (model.decode_experts)
+-//   MXFP8: bf16(e4m3 * 2^(e8m0 - 127))                    (model.decode_experts)
+-// Activation rows (gathered by pair for the experts) and the weight codes stream in through 16-byte cp.async:
+-// activations in 3 stages of 64 elements, the codes in 2 slots of 128-byte (64-byte for the NVFP4 down
+-// projection) row pieces, so DRAM reads whole lines and small chunks, which are bound by the weight bytes, keep
+-// enough loads in flight. One barrier per step. Code rows are padded in shared memory so the 8 rows of a fragment
+-// load hit distinct banks. m16 row blocks past the tile's row count skip their MMAs (zero-filled copies).
+-// The per-element products and the k order of the FP32 sums are those of the BF16 MMA over decoded rows.
+-// Epilogues: gate/up (w13 rows interleaved, 2i gate and 2i + 1 up, so each thread holds gate and up of the same
+-// i): act = bf16(softcap(bf16 g, 4) * sigmoid(bf16 g) * softcap(bf16 u, 25)); down: bf16 per pair placed at
+-// t * 8 + slot (moe_combine sums the slots in order: deterministic).
++// Two paths, compiled as separate template instantiations and dispatched by MoeAct (a.q != nullptr):
++//  - BF16 (legacy): weights decoded on the fly into BF16 MMA fragments, mma.m16n8k16 BF16.
++//  - Native block-scaled: activations quantized per row (nvfp4_quant_rows / mxfp8_quant_rows in
++//    moe_quant.cu) to NVFP4 (e2m1 + ue4m3 per k16) or MXFP8 (e4m3 + ue8m0 per k32); the checkpoint's
++//    own codes and block scales feed Blackwell tensor cores directly:
++//      NVFP4: mma.sync.aligned.m16n8k64.row.col.kind::mxf4nvf4.block_scale.scale_vec::4X
++//             .f32.e2m1.e2m1.f32.ue4m3   (per-expert `factor` applied to the FP32 accumulator)
++//      MXFP8: mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X
++//             .f32.e4m3.e4m3.f32.ue8m0   (two chained instructions per BK=64 step)
++//    Fragment layouts per the PTX m16n8k64/k32 tables: A reg r holds rows g (+8 for r&1), k span
++//    (lane&3)*words + r/2*half; B fragment column = lane>>2 (the warp's weight rows), k span (lane&3);
++//    scale bytes little-endian by k chunk; SFA from lanes lane%4 in {0,1} (rows g, g+8), SFB from
++//    lane%4 == 0 (column lane>>2).
++//
++// Tiling (both paths): a CTA computes up to `TM` activation rows x 128 weight rows, K in steps of 64, the
++// 8 warps splitting the weight rows (16 each). Activations and weight codes stream through cp.async; every
++// weight element is staged exactly once per CTA, decoded (legacy) or fed raw (native).
++// Epilogues: gate/up (w13 rows interleaved, 2i gate and 2i + 1 up):
++//   act = bf16(softcap(bf16 g, 4) * sigmoid(bf16 g) * softcap(bf16 u, 25)); down: bf16 per pair placed at
++//   t * 8 + slot (moe_combine sums the slots in order: deterministic).
+ #include "kernels/prefill/common.cuh"
+ #include "kernels/prefill/prefill.h"
+ 
+@@ -34,7 +39,27 @@ constexpr int KCH = BK / 8;  // 16-byte chunks per activation tile row
+ 
+ __constant__ float kE2M1[16] = {0.f, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, -0.f, -.5f, -1.f, -1.5f, -2.f, -3.f, -4.f, -6.f};
+ 
+-template <int FMT, int K, int TM>
++// D += A * B, m16n8k64, E2M1 inputs with UE4M3 block scales (one per 16 k), FP32 accumulation.
++__device__ __forceinline__ void mma_nvfp4(float (&c)[4], const unsigned (&a)[4], unsigned b0, unsigned b1,
++                                          unsigned sfa, unsigned sfb) {
++  asm volatile(
++      "mma.sync.aligned.m16n8k64.row.col.kind::mxf4nvf4.block_scale.scale_vec::4X.f32.e2m1.e2m1.f32.ue4m3 "
++      "{ %0, %1, %2, %3 }, { %4, %5, %6, %7 }, { %8, %9 }, { %0, %1, %2, %3 }, %10, { 0, 0 }, %11, { 0, 0 };\n"
++      : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
++      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1), "r"(sfa), "r"(sfb));
++}
++
++// D += A * B, m16n8k32, E4M3 inputs with UE8M0 block scales (one per 32 k), FP32 accumulation.
++__device__ __forceinline__ void mma_mxfp8(float (&c)[4], const unsigned (&a)[4], unsigned b0, unsigned b1,
++                                          unsigned sfa, unsigned sfb) {
++  asm volatile(
++      "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X.f32.e4m3.e4m3.f32.ue8m0 "
++      "{ %0, %1, %2, %3 }, { %4, %5, %6, %7 }, { %8, %9 }, { %0, %1, %2, %3 }, %10, { 0, 0 }, %11, { 0, 0 };\n"
++      : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
++      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1), "r"(sfa), "r"(sfb));
++}
++
++template <int FMT, int K, int TM, bool NATIVE>
+ struct Cfg {
+   static constexpr int CODE_ROW = FMT == FMT_NVFP4 ? K / 2 : K;  // checkpoint bytes per weight row
+   static constexpr int SCALE_ROW = FMT == FMT_NVFP4 ? K / 16 : K / 32;
+@@ -42,18 +67,22 @@ struct Cfg {
+   static constexpr int WK = FMT == FMT_NVFP4 ? 128 : 64;
+   static constexpr int R = WK / BK;  // activation steps per weight chunk
+   static constexpr int KC = K / WK;  // weight chunks
+-  // weight slots: the chunk of step s + 1 must have landed (and be published by the barrier) at step s, when its
+-  // B fragments are decoded under step s's MMAs: R (WS - 1) >= AS. Small-row tiles prefetch further.
++  // weight slots: the chunk of step s + 1 must have landed (and be published by the barrier) at step s.
++  // Small-row tiles prefetch further.
+   static constexpr int WS = TM <= 32 ? (FMT == FMT_NVFP4 ? 6 : 7) : (FMT == FMT_NVFP4 ? 3 : 4);
+   static_assert(R * (WS - 1) >= AS);
+   static constexpr int WCODE = FMT == FMT_NVFP4 ? WK / 2 : WK;  // code bytes per row per chunk
+-  static constexpr int WSTRIDE = WCODE + 16;                    // padded: fragment loads on distinct banks
++  static constexpr int WSTRIDE = WCODE + 16;                    // padded: 4-byte reads on distinct banks
+   static constexpr int W_BYTES = TN * WSTRIDE;
+-  static constexpr int A_BYTES = TM * BK * 2;
+-  static constexpr int SC_BYTES = TN * SCALE_ROW;               // block scales of the whole tile
+-  static constexpr int OFF_W = AS * A_BYTES, OFF_SC = OFF_W + WS * W_BYTES;
++  static constexpr int A_BYTES = NATIVE ? 0 : TM * BK * 2;                 // legacy bf16 tile
++  static constexpr int AQ_BYTES = NATIVE ? TM * (FMT == FMT_NVFP4 ? BK / 2 : BK) : 0;      // packed codes
++  static constexpr int AS_BYTES = NATIVE ? TM * (FMT == FMT_NVFP4 ? 4 : 4) : 0;            // scales (4B/row slot)
++  static constexpr int SC_BYTES = TN * SCALE_ROW;  // block scales of the whole tile
++  // layout: [A legacy | A codes | A scales (per stage)][W][SC]; LUT only for the legacy path
++  static constexpr int OFF_W = AS * (A_BYTES + AQ_BYTES + AS_BYTES);
++  static constexpr int OFF_SC = OFF_W + WS * W_BYTES;
+   static constexpr int OFF_LUT = (OFF_SC + SC_BYTES + 15) / 16 * 16;
+-  static constexpr int SMEM = OFF_LUT + 64;
++  static constexpr int SMEM = NATIVE ? (OFF_SC + SC_BYTES) : OFF_LUT + 64;
+   static_assert(K % WK == 0 && SMEM <= 101376);
+ };
+ 
+@@ -61,7 +90,9 @@ struct GemmArgs {
+   const uint8_t* codes = nullptr;   // NVFP4 / MXFP8 expert codes [128, N, ..]
+   const uint8_t* scales = nullptr;  // block scales
+   const float* factors = nullptr;   // NVFP4 per-expert factor
+-  const uint16_t* a = nullptr;      // activations (bf16)
++  const uint16_t* a = nullptr;      // activations (bf16, legacy path)
++  const uint8_t* aq = nullptr;      // quantized activation codes (native path)
++  const uint8_t* as = nullptr;      // quantized activation block scales (native path)
+   MoeWork w;                        // tiles and pair lists
+   uint16_t* out = nullptr;
+ };
+@@ -72,8 +103,7 @@ __device__ __forceinline__ void cp_async4(void* smem_dst, const void* gmem_src)
+ 
+ __device__ __forceinline__ float softcap(float x, float cap) { return tanhf(x * (1.f / cap)) * cap; }
+ 
+-// One activation step of MMAs for the first MT 16-row blocks: per k16 group, the A fragments by ldmatrix, then the
+-// MMAs, then `after(kk)` (the next step's B decoding, which runs under the issued MMAs).
++// One activation step of legacy MMAs for the first MT 16-row blocks.
+ template <int MT, int TM, class After>
+ __device__ __forceinline__ void mma_step(float (&acc)[TM / 16][2][4], const uint16_t* A,
+                                          const unsigned (&b)[BK / 16][2][2], int lane, After&& after) {
+@@ -93,18 +123,88 @@ __device__ __forceinline__ void mma_step(float (&acc)[TM / 16][2][4], const uint
+   }
+ }
+ 
++// Native NVFP4 step: MT m16 blocks x 2 n8 blocks of m16n8k64 block-scaled MMA. Fragments are read from
++// the staged tiles here (Q: packed codes [TM][32], S: scales [TM][4], ws: weight codes, sc: weight scales).
++template <int MT, int SCALE_ROW>
++__device__ __forceinline__ void nvfp4_step(float (&acc)[MT][2][4], const unsigned char* Q, const unsigned char* S,
++                                           const unsigned char* ws, const uint8_t* sc, int koff, int ks, int lane,
++                                           int warp) {
++  const int c = lane & 3;
++  const int row_n[2] = {warp * 16 + (lane >> 2), warp * 16 + 8 + (lane >> 2)};
++  unsigned bfr[2][2], sfb[2];
++#pragma unroll
++  for (int nt = 0; nt < 2; ++nt) {
++    const unsigned char* wr = ws + row_n[nt] * (80) + koff;  // WSTRIDE is WCODE + 16 = 80
++    bfr[nt][0] = *reinterpret_cast<const unsigned*>(wr + c * 4);
++    bfr[nt][1] = *reinterpret_cast<const unsigned*>(wr + 16 + c * 4);
++    sfb[nt] = c == 0 ? *reinterpret_cast<const unsigned*>(sc + row_n[nt] * SCALE_ROW + ks * 4) : 0u;
++  }
++#pragma unroll
++  for (int mt = 0; mt < MT; ++mt) {
++    const int r0 = mt * 16 + (lane >> 2);
++    unsigned a[4];
++    a[0] = *reinterpret_cast<const unsigned*>(Q + r0 * 32 + c * 4);
++    a[1] = *reinterpret_cast<const unsigned*>(Q + (r0 + 8) * 32 + c * 4);
++    a[2] = *reinterpret_cast<const unsigned*>(Q + r0 * 32 + 16 + c * 4);
++    a[3] = *reinterpret_cast<const unsigned*>(Q + (r0 + 8) * 32 + 16 + c * 4);
++    const unsigned sfa = c == 0 ? *reinterpret_cast<const unsigned*>(S + r0 * 4)
++                       : c == 1 ? *reinterpret_cast<const unsigned*>(S + (r0 + 8) * 4)
++                                : 0u;
++    mma_nvfp4(acc[mt][0], a, bfr[0][0], bfr[0][1], sfa, sfb[0]);
++    mma_nvfp4(acc[mt][1], a, bfr[1][0], bfr[1][1], sfa, sfb[1]);
++  }
++}
++
++// Native MXFP8 step: MT m16 blocks x 2 n8 blocks x 2 chained m16n8k32 (k32 halves). Q rows are 64 code
++// bytes (one BK step), S rows are 4B slots: for step ks the two scale bytes sit at S[r*4 + (ks & 1) * 2 + h]
++// (the 4B staged load is aligned down and covers two consecutive steps).
++template <int MT, int SCALE_ROW>
++__device__ __forceinline__ void mxfp8_step(float (&acc)[MT][2][4], const unsigned char* Q, const unsigned char* S,
++                                           const unsigned char* ws, const uint8_t* sc, int koff, int ks, int lane,
++                                           int warp) {
++  const int c = lane & 3;
++  const int row_n[2] = {warp * 16 + (lane >> 2), warp * 16 + 8 + (lane >> 2)};
++  const int tw = (ks & 1) * 2;
++#pragma unroll
++  for (int mt = 0; mt < MT; ++mt) {
++    const int r0 = mt * 16 + (lane >> 2);
++    const unsigned char* qr = Q + r0 * 64;
++    const unsigned char* qr8 = Q + (r0 + 8) * 64;
++#pragma unroll
++    for (int h = 0; h < 2; ++h) {
++      unsigned a[4];
++      a[0] = *reinterpret_cast<const unsigned*>(qr + h * 32 + c * 4);
++      a[1] = *reinterpret_cast<const unsigned*>(qr8 + h * 32 + c * 4);
++      a[2] = *reinterpret_cast<const unsigned*>(qr + h * 32 + 16 + c * 4);
++      a[3] = *reinterpret_cast<const unsigned*>(qr8 + h * 32 + 16 + c * 4);
++      const unsigned sfa = c == 0 ? unsigned(S[r0 * 4 + tw + h])
++                         : c == 1 ? unsigned(S[(r0 + 8) * 4 + tw + h])
++                                  : 0u;
++#pragma unroll
++      for (int nt = 0; nt < 2; ++nt) {
++        const unsigned char* wr = ws + row_n[nt] * 80 + koff;
++        const unsigned b0 = *reinterpret_cast<const unsigned*>(wr + h * 32 + c * 4);
++        const unsigned b1 = *reinterpret_cast<const unsigned*>(wr + h * 32 + 16 + c * 4);
++        const unsigned sfb = c == 0 ? unsigned(sc[row_n[nt] * SCALE_ROW + ks * 2 + h]) : 0u;
++        mma_mxfp8(acc[mt][nt], a, b0, b1, sfa, sfb);
++      }
++    }
++  }
++}
++
+ // Up: A = x rows of the pairs' tokens (K = H), W = w13 (N = 2I), out act [pairs, I].
+ // Down: A = act rows (K = I), W = w2 (N = H), out down [T * 8, H] at pair_dst.
+-template <int FMT, Mode MODE, int K, int TM>
++template <int FMT, Mode MODE, int K, int TM, bool NATIVE>
+ __global__ void __launch_bounds__(NT, 1) wgemm_kernel(const GemmArgs g) {
+   constexpr int KS = K / BK;
+   constexpr int NE = MODE == Mode::Up ? 2 * kInter : kHidden;  // expert weight rows
+-  using C = Cfg<FMT, K, TM>;
++  using C = Cfg<FMT, K, TM, NATIVE>;
+   extern __shared__ __align__(128) unsigned char smem[];
+-  unsigned char* a_smem = smem;
++  unsigned char* a_smem = smem;                    // legacy bf16 tile (NATIVE: unused, zero-sized array ok)
++  unsigned char* aq_smem = smem;                   // native codes (aliases a_smem; only one is used)
++  unsigned char* asc_smem = smem + AS * C::AQ_BYTES;
+   unsigned char* w_smem = smem + C::OFF_W;
+   uint8_t* sc_smem = smem + C::OFF_SC;
+-  float* lut = reinterpret_cast<float*>(smem + C::OFF_LUT);
+   const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+ 
+   // ---- tile: n pair rows (from pb) of expert e x weight rows n0..n0+127
+@@ -116,19 +216,26 @@ __global__ void __launch_bounds__(NT, 1) wgemm_kernel(const GemmArgs g) {
+   const int n0 = (blockIdx.x % NTILES_N) * TN;
+   const uint8_t* code_tile = g.codes + (int64_t(e) * NE + n0) * C::CODE_ROW;
+   const uint8_t* scale_tile = g.scales + (int64_t(e) * NE + n0) * C::SCALE_ROW;
+-  if (tid < 16) lut[tid] = kE2M1[tid];
+ 
+-  // activation rows of this thread's cp.async chunks: rows tid / 8 + 32 i, chunk tid % 8
++  // activation row sources (gather for Up): row r reads token/act row src_of(r)
++  auto src_of = [&](int r) -> int {
++    const int rr = r < n ? r : 0;
++    if constexpr (MODE == Mode::Up) return g.w.pair_token[pb + rr];
++    else return pb + rr;
++  };
+   const uint16_t* arow[TM / 32];
++  const uint8_t* aqrow[TM / 32];
++  const uint8_t* asrow[TM / 32];
+ #pragma unroll
+   for (int i = 0; i < TM / 32; ++i) {
+     const int r = (tid >> 3) + 32 * i;
+-    const int rr = r < n ? r : 0;
+-    if constexpr (MODE == Mode::Up) arow[i] = g.a + size_t(g.w.pair_token[pb + rr]) * K;
+-    else arow[i] = g.a + size_t(pb + rr) * K;
++    const int s = src_of(r);
++    arow[i] = g.a + size_t(s) * K;
++    aqrow[i] = g.aq + size_t(s) * (FMT == FMT_NVFP4 ? K / 2 : K);
++    asrow[i] = g.as + size_t(s) * (FMT == FMT_NVFP4 ? K / 16 : K / 32);
+   }
+ 
+-  auto load_a = [&](int ks) {
++  auto load_a = [&](int ks) {  // legacy bf16 staging (swizzled, ldmatrix-friendly)
+     uint16_t* A = reinterpret_cast<uint16_t*>(a_smem + (ks % AS) * C::A_BYTES);
+ #pragma unroll
+     for (int i = 0; i < TM / 32; ++i) {
+@@ -136,6 +243,32 @@ __global__ void __launch_bounds__(NT, 1) wgemm_kernel(const GemmArgs g) {
+       cp_async16(A + swz<KCH>(r, c), arow[i] + ks * BK + c * 8, r < n ? 16 : 0);
+     }
+   };
++  auto load_aq = [&](int ks) {  // native staging: packed codes (16B chunks) + scales (4B per row)
++    unsigned char* Q = aq_smem + (ks % AS) * C::AQ_BYTES;
++    unsigned char* S = asc_smem + (ks % AS) * C::AS_BYTES;
++    constexpr int QB = FMT == FMT_NVFP4 ? 32 : 64;  // code bytes per row per step
++    constexpr int CH = QB / 16;                     // 16B chunks per row
++#pragma unroll
++    for (int i = 0; i < TM / 32; ++i) {
++      const int r = (tid >> 3) + 32 * i, c = tid & 7;
++      if (c < CH && r < n) cp_async16(Q + r * QB + c * 16, aqrow[i] + ks * QB + c * 16);
++    }
++    // scales: one 4B load per active row, 4-byte aligned (NVFP4: the 4 k16 bytes of the step; MXFP8:
++    // 4 bytes covering this step's two k32 scale bytes at ((ks & 1) * 2)). Padding rows keep the zero-fill
++    // written at kernel start (their code bytes are also never written: the staging above skips r >= n,
++    // so the initial zeros survive and contribute exact 0 to the MMAs).
++#pragma unroll
++    for (int i = 0; i < (TM + NT - 1) / NT; ++i) {
++      const int r = tid + i * NT;
++      if (r < n) {
++        const int s = src_of(r);
++        if constexpr (FMT == FMT_NVFP4)
++          cp_async4(S + r * 4, g.as + size_t(s) * (K / 16) + ks * 4);
++        else
++          cp_async4(S + r * 4, g.as + size_t(s) * (K / 32) + ((ks * 2) & ~3));
++      }
++    }
++  };
+   auto load_w = [&](int chunk) {
+     unsigned char* ws = w_smem + (chunk % C::WS) * C::W_BYTES;
+     constexpr int CPR = C::WCODE / 16;  // 16-byte pieces per row
+@@ -147,10 +280,18 @@ __global__ void __launch_bounds__(NT, 1) wgemm_kernel(const GemmArgs g) {
+   };
+   // group j: activation step j (plus whatever weight chunk was issued since the previous commit)
+   auto issue = [&](int j) {
+-    if (j < KS) load_a(j);
++    if (j < KS) {
++      if constexpr (NATIVE) load_aq(j);
++      else load_a(j);
++    }
+     cp_commit();
+   };
+ 
++  if constexpr (NATIVE) {  // padding rows' codes and scales start zeroed (cp.async has no 4B zero-fill)
++    for (int id = tid; id < AS * (C::AQ_BYTES + C::AS_BYTES) / 4; id += NT)
++      *reinterpret_cast<unsigned*>(smem + id * 4) = 0u;
++  }
++
+   // the tile's block scales, with the first activation group
+   for (int id = tid; id < C::SC_BYTES / 4; id += NT)
+     cp_async4(sc_smem + id * 4, scale_tile + (id * 4 / C::SCALE_ROW) * int64_t(C::SCALE_ROW) + (id * 4) % C::SCALE_ROW);
+@@ -169,90 +310,130 @@ __global__ void __launch_bounds__(NT, 1) wgemm_kernel(const GemmArgs g) {
+ #pragma unroll
+     for (int b = 0; b < 2; ++b) acc[a][b][0] = acc[a][b][1] = acc[a][b][2] = acc[a][b][3] = 0.f;
+ 
+-  // B fragments of step ks (k16 group kk) decoded from the staged codes of its weight chunk
+-  auto scales_of = [&](int ks, float (&sc)[2][4]) {
+-#pragma unroll
+-    for (int nt = 0; nt < 2; ++nt) {
+-      const int row = warp * 16 + nt * 8 + (lane >> 2);
+-      if constexpr (FMT == FMT_NVFP4) {
+-        const uint32_t s4 = *reinterpret_cast<const uint32_t*>(sc_smem + row * C::SCALE_ROW + ks * 4);
+-        const float2 lo = e4m3x2_to_float2(uint16_t(s4 & 0xffff)), hi = e4m3x2_to_float2(uint16_t(s4 >> 16));
+-        sc[nt][0] = lo.x, sc[nt][1] = lo.y, sc[nt][2] = hi.x, sc[nt][3] = hi.y;
+-      } else {
+-        const uint8_t* ms = sc_smem + row * C::SCALE_ROW + ks * 2;
+-        sc[nt][0] = sc[nt][1] = exp2f(float(ms[0]) - 127.f);
+-        sc[nt][2] = sc[nt][3] = exp2f(float(ms[1]) - 127.f);
+-      }
+-    }
+-  };
+-  auto decode = [&](int ks, int kk, const float (&sc)[2][4], unsigned (&b)[BK / 16][2][2]) {
+-    const unsigned char* ws = w_smem + ((ks / C::R) % C::WS) * C::W_BYTES;
+-    const int kc = (ks % C::R) * BK + kk * 16;  // first element of the k16 group inside the chunk
+-#pragma unroll
+-    for (int nt = 0; nt < 2; ++nt) {
+-      const int row = warp * 16 + nt * 8 + (lane >> 2);
+-      const float s = sc[nt][kk];
+-      if constexpr (FMT == FMT_NVFP4) {
+-        // elements 2c, 2c+1 (byte c) and 8 + 2c, +1 (byte 4 + c) of the k16 group
+-        const uint2 wd = *reinterpret_cast<const uint2*>(ws + row * C::WSTRIDE + kc / 2);
+-        const uint32_t b0 = (wd.x >> (8 * c)) & 0xffu, b1 = (wd.y >> (8 * c)) & 0xffu;
+-        b[kk][nt][0] = pack_bf16x2((lut[b0 & 0xf] * s) * factor, (lut[b0 >> 4] * s) * factor);
+-        b[kk][nt][1] = pack_bf16x2((lut[b1 & 0xf] * s) * factor, (lut[b1 >> 4] * s) * factor);
+-      } else {
+-        const uint4 q = *reinterpret_cast<const uint4*>(ws + row * C::WSTRIDE + kc);
+-        const uint32_t w0 = (c >> 1) ? q.y : q.x, w1 = (c >> 1) ? q.w : q.z;
+-        const float2 f0 = e4m3x2_to_float2(uint16_t(w0 >> (16 * (c & 1))));
+-        const float2 f1 = e4m3x2_to_float2(uint16_t(w1 >> (16 * (c & 1))));
+-        b[kk][nt][0] = pack_bf16x2(f0.x * s, f0.y * s);
+-        b[kk][nt][1] = pack_bf16x2(f1.x * s, f1.y * s);
+-      }
+-      asm volatile("" : "+r"(b[kk][nt][0]), "+r"(b[kk][nt][1]));
+-    }
+-  };
+-
+-  // Software pipeline: step ks's MMAs run on fragments decoded during step ks - 1; the decoding of step ks + 1
+-  // is interleaved with them (its chunk has landed: R (WS - 1) >= AS, and the barrier published it).
+-  unsigned bcur[BK / 16][2][2], bnext[BK / 16][2][2];
++  if constexpr (NATIVE) {
+ #pragma unroll 1
+-  for (int ks = 0; ks < KS; ++ks) {
+-    cp_wait<AS - 2>();
+-    __syncthreads();
+-    const int chunk = ks / C::R;
+-    // first step of a chunk: the chunk WS - 1 ahead into the slot the previous chunk used (read before the barrier)
+-    if (ks % C::R == 0 && chunk + C::WS - 1 < C::KC) load_w(chunk + C::WS - 1);
+-    issue(ks + AS - 1);
+-    if (ks == 0) {
+-      float sc0[2][4];
+-      scales_of(0, sc0);
+-#pragma unroll
+-      for (int kk = 0; kk < BK / 16; ++kk) decode(0, kk, sc0, bcur);
++    for (int ks = 0; ks < KS; ++ks) {
++      cp_wait<AS - 2>();
++      __syncthreads();
++      const int chunk = ks / C::R;
++      if (ks % C::R == 0 && chunk + C::WS - 1 < C::KC) load_w(chunk + C::WS - 1);
++      issue(ks + AS - 1);
++      const unsigned char* Q = aq_smem + (ks % AS) * C::AQ_BYTES;
++      const unsigned char* S = asc_smem + (ks % AS) * C::AS_BYTES;
++      const unsigned char* ws = w_smem + (chunk % C::WS) * C::W_BYTES;
++      const int koff = (ks % C::R) * (FMT == FMT_NVFP4 ? 32 : 64);
++#define NV_STEP(MT)                                                                           \
++  nvfp4_step<MT, C::SCALE_ROW>(*reinterpret_cast<float (*)[MT][2][4]>(acc), Q, S, ws, sc_smem, koff, ks, lane, \
++                               warp)
++#define MX_STEP(MT)                                                                           \
++  mxfp8_step<MT, C::SCALE_ROW>(*reinterpret_cast<float (*)[MT][2][4]>(acc), Q, S, ws, sc_smem, koff, ks, lane, \
++                               warp)
++      if constexpr (FMT == FMT_NVFP4) {
++        switch (mact) {
++          case 1: if constexpr (TM / 16 >= 1) NV_STEP(1); break;
++          case 2: if constexpr (TM / 16 >= 2) NV_STEP(2); break;
++          case 3: if constexpr (TM / 16 >= 3) NV_STEP(3); break;
++          case 4: if constexpr (TM / 16 >= 4) NV_STEP(4); break;
++          case 5: if constexpr (TM / 16 >= 5) NV_STEP(5); break;
++          case 6: if constexpr (TM / 16 >= 6) NV_STEP(6); break;
++          case 7: if constexpr (TM / 16 >= 7) NV_STEP(7); break;
++          default: NV_STEP(TM / 16); break;
++        }
++      } else {
++        switch (mact) {
++          case 1: if constexpr (TM / 16 >= 1) MX_STEP(1); break;
++          case 2: if constexpr (TM / 16 >= 2) MX_STEP(2); break;
++          case 3: if constexpr (TM / 16 >= 3) MX_STEP(3); break;
++          case 4: if constexpr (TM / 16 >= 4) MX_STEP(4); break;
++          case 5: if constexpr (TM / 16 >= 5) MX_STEP(5); break;
++          case 6: if constexpr (TM / 16 >= 6) MX_STEP(6); break;
++          case 7: if constexpr (TM / 16 >= 7) MX_STEP(7); break;
++          default: MX_STEP(TM / 16); break;
++        }
++      }
++#undef NV_STEP
++#undef MX_STEP
+     }
+-    const uint16_t* A = reinterpret_cast<const uint16_t*>(a_smem + (ks % AS) * C::A_BYTES);
+-    const bool more = ks + 1 < KS;
+-    float scn[2][4];
+-    if (more) scales_of(ks + 1, scn);
+-    auto after = [&](int kk) {
+-      if (more) decode(ks + 1, kk, scn, bnext);
++  } else {
++    // ---- legacy BF16 pipeline (unchanged)
++    float* lut = reinterpret_cast<float*>(smem + C::OFF_LUT);
++    if (tid < 16) lut[tid] = kE2M1[tid];
++    auto scales_of = [&](int ks, float (&sc)[2][4]) {
++#pragma unroll
++      for (int nt = 0; nt < 2; ++nt) {
++        const int row = warp * 16 + nt * 8 + (lane >> 2);
++        if constexpr (FMT == FMT_NVFP4) {
++          const uint32_t s4 = *reinterpret_cast<const uint32_t*>(sc_smem + row * C::SCALE_ROW + ks * 4);
++          const float2 lo = e4m3x2_to_float2(uint16_t(s4 & 0xffff)), hi = e4m3x2_to_float2(uint16_t(s4 >> 16));
++          sc[nt][0] = lo.x, sc[nt][1] = lo.y, sc[nt][2] = hi.x, sc[nt][3] = hi.y;
++        } else {
++          const uint8_t* ms = sc_smem + row * C::SCALE_ROW + ks * 2;
++          sc[nt][0] = sc[nt][1] = exp2f(float(ms[0]) - 127.f);
++          sc[nt][2] = sc[nt][3] = exp2f(float(ms[1]) - 127.f);
++        }
++      }
+     };
+-    // the row-block count is a template constant inside mma_step: a runtime `mt < mact` test would be if-converted
+-    // into predicated MMAs, which still occupy the tensor pipe (8x the work for a 16-row tile)
+-    switch (mact) {
+-      case 1: if constexpr (1 <= TM / 16) mma_step<1, TM>(acc, A, bcur, lane, after); break;
+-      case 2: if constexpr (2 <= TM / 16) mma_step<2, TM>(acc, A, bcur, lane, after); break;
+-      case 3: if constexpr (3 <= TM / 16) mma_step<3, TM>(acc, A, bcur, lane, after); break;
+-      case 4: if constexpr (4 <= TM / 16) mma_step<4, TM>(acc, A, bcur, lane, after); break;
+-      case 5: if constexpr (5 <= TM / 16) mma_step<5, TM>(acc, A, bcur, lane, after); break;
+-      case 6: if constexpr (6 <= TM / 16) mma_step<6, TM>(acc, A, bcur, lane, after); break;
+-      case 7: if constexpr (7 <= TM / 16) mma_step<7, TM>(acc, A, bcur, lane, after); break;
+-      default: mma_step<TM / 16, TM>(acc, A, bcur, lane, after); break;
++    auto decode = [&](int ks, int kk, const float (&sc)[2][4], unsigned (&b)[BK / 16][2][2]) {
++      const unsigned char* ws = w_smem + ((ks / C::R) % C::WS) * C::W_BYTES;
++      const int kc = (ks % C::R) * BK + kk * 16;  // first element of the k16 group inside the chunk
++#pragma unroll
++      for (int nt = 0; nt < 2; ++nt) {
++        const int row = warp * 16 + nt * 8 + (lane >> 2);
++        const float s = sc[nt][kk];
++        if constexpr (FMT == FMT_NVFP4) {
++          const uint2 wd = *reinterpret_cast<const uint2*>(ws + row * C::WSTRIDE + kc / 2);
++          const uint32_t b0 = (wd.x >> (8 * c)) & 0xffu, b1 = (wd.y >> (8 * c)) & 0xffu;
++          b[kk][nt][0] = pack_bf16x2((lut[b0 & 0xf] * s) * factor, (lut[b0 >> 4] * s) * factor);
++          b[kk][nt][1] = pack_bf16x2((lut[b1 & 0xf] * s) * factor, (lut[b1 >> 4] * s) * factor);
++        } else {
++          const uint4 q = *reinterpret_cast<const uint4*>(ws + row * C::WSTRIDE + kc);
++          const uint32_t w0 = (c >> 1) ? q.y : q.x, w1 = (c >> 1) ? q.w : q.z;
++          const float2 f0 = e4m3x2_to_float2(uint16_t(w0 >> (16 * (c & 1))));
++          const float2 f1 = e4m3x2_to_float2(uint16_t(w1 >> (16 * (c & 1))));
++          b[kk][nt][0] = pack_bf16x2(f0.x * s, f0.y * s);
++          b[kk][nt][1] = pack_bf16x2(f1.x * s, f1.y * s);
++        }
++        asm volatile("" : "+r"(b[kk][nt][0]), "+r"(b[kk][nt][1]));
++      }
++    };
++    unsigned bcur[BK / 16][2][2], bnext[BK / 16][2][2];
++#pragma unroll 1
++    for (int ks = 0; ks < KS; ++ks) {
++      cp_wait<AS - 2>();
++      __syncthreads();
++      const int chunk = ks / C::R;
++      if (ks % C::R == 0 && chunk + C::WS - 1 < C::KC) load_w(chunk + C::WS - 1);
++      issue(ks + AS - 1);
++      if (ks == 0) {
++        float sc0[2][4];
++        scales_of(0, sc0);
++#pragma unroll
++        for (int kk = 0; kk < BK / 16; ++kk) decode(0, kk, sc0, bcur);
++      }
++      const uint16_t* A = reinterpret_cast<const uint16_t*>(a_smem + (ks % AS) * C::A_BYTES);
++      const bool more = ks + 1 < KS;
++      float scn[2][4];
++      if (more) scales_of(ks + 1, scn);
++      auto after = [&](int kk) {
++        if (more) decode(ks + 1, kk, scn, bnext);
++      };
++      switch (mact) {
++        case 1: if constexpr (1 <= TM / 16) mma_step<1, TM>(acc, A, bcur, lane, after); break;
++        case 2: if constexpr (2 <= TM / 16) mma_step<2, TM>(acc, A, bcur, lane, after); break;
++        case 3: if constexpr (3 <= TM / 16) mma_step<3, TM>(acc, A, bcur, lane, after); break;
++        case 4: if constexpr (4 <= TM / 16) mma_step<4, TM>(acc, A, bcur, lane, after); break;
++        case 5: if constexpr (5 <= TM / 16) mma_step<5, TM>(acc, A, bcur, lane, after); break;
++        case 6: if constexpr (6 <= TM / 16) mma_step<6, TM>(acc, A, bcur, lane, after); break;
++        case 7: if constexpr (7 <= TM / 16) mma_step<7, TM>(acc, A, bcur, lane, after); break;
++        default: mma_step<TM / 16, TM>(acc, A, bcur, lane, after); break;
++      }
++#pragma unroll
++      for (int kk = 0; kk < BK / 16; ++kk)
++#pragma unroll
++        for (int nt = 0; nt < 2; ++nt) bcur[kk][nt][0] = bnext[kk][nt][0], bcur[kk][nt][1] = bnext[kk][nt][1];
+     }
+-#pragma unroll
+-    for (int kk = 0; kk < BK / 16; ++kk)
+-#pragma unroll
+-      for (int nt = 0; nt < 2; ++nt) bcur[kk][nt][0] = bnext[kk][nt][0], bcur[kk][nt][1] = bnext[kk][nt][1];
+   }
+   cp_wait<0>();
+-
+ #pragma unroll
+   for (int mt = 0; mt < TM / 16; ++mt) {
+     if (mt >= mact) continue;
+@@ -264,42 +445,55 @@ __global__ void __launch_bounds__(NT, 1) wgemm_kernel(const GemmArgs g) {
+       for (int nt = 0; nt < 2; ++nt) {
+         const int cl = warp * 16 + nt * 8 + c * 2;  // column inside the tile
+         const float c0 = acc[mt][nt][2 * half], c1 = acc[mt][nt][2 * half + 1];
++        // NATIVE applies the per-expert factor to the FP32 accumulator; the legacy path folded it into the
++        // decoded B fragments already (c0/c1 are final there).
++        const float fc0 = NATIVE ? c0 * factor : c0, fc1 = NATIVE ? c1 * factor : c1;
+         if constexpr (MODE == Mode::Up) {
+-          const float gt = round_bf16(c0), u = round_bf16(c1);
++          const float gt = round_bf16(fc0), u = round_bf16(fc1);
+           const float sig = 1.f / (1.f + expf(-gt));
+           const float v = __fmul_rn(__fmul_rn(softcap(gt, 4.f), sig), softcap(u, 25.f));
+           g.out[size_t(pb + row) * kInter + (n0 + cl) / 2] = f2bf_bits(v);
+         } else {
+           const int dst = g.w.pair_dst[pb + row];
+-          *reinterpret_cast<uint32_t*>(g.out + size_t(dst) * kHidden + n0 + cl) = pack_bf16x2(c0, c1);
++          *reinterpret_cast<uint32_t*>(g.out + size_t(dst) * kHidden + n0 + cl) = pack_bf16x2(fc0, fc1);
+         }
+       }
+     }
+   }
+ }
+ 
+-template <int FMT, Mode MODE, int K, int TM>
++template <int FMT, Mode MODE, int K, int TM, bool NATIVE>
+ void launch(const GemmArgs& g, int grid, cudaStream_t stream) {
+-  constexpr int SMEM = Cfg<FMT, K, TM>::SMEM;
++  constexpr int SMEM = Cfg<FMT, K, TM, NATIVE>::SMEM;
+   static const cudaError_t attr =
+-      cudaFuncSetAttribute(wgemm_kernel<FMT, MODE, K, TM>, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM);
+-  if (attr != cudaSuccess) throw std::runtime_error("prefill wgemm: shared memory attribute failed");
+-  wgemm_kernel<FMT, MODE, K, TM><<<grid, NT, SMEM, stream>>>(g);
++      cudaFuncSetAttribute(wgemm_kernel<FMT, MODE, K, TM, NATIVE>, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM);
++  if (attr != cudaSuccess)
++    throw std::runtime_error(std::string("prefill wgemm: shared memory attribute failed: ") +
++                             cudaGetErrorString(attr) + " (smem " + std::to_string(SMEM) + ")");
++  wgemm_kernel<FMT, MODE, K, TM, NATIVE><<<grid, NT, SMEM, stream>>>(g);
+ }
+ 
+ template <int FMT, Mode MODE, int K>
+ void launch_rows(const GemmArgs& g, int tm, int grid_per_row_tile, int row_tiles, cudaStream_t stream) {
+-  if (tm == 32) launch<FMT, MODE, K, 32>(g, grid_per_row_tile * row_tiles, stream);
+-  else launch<FMT, MODE, K, 128>(g, grid_per_row_tile * row_tiles, stream);
++  const bool native = g.aq != nullptr;
++  if (tm == 32) {
++    if (native) launch<FMT, MODE, K, 32, true>(g, grid_per_row_tile * row_tiles, stream);
++    else launch<FMT, MODE, K, 32, false>(g, grid_per_row_tile * row_tiles, stream);
++  } else {
++    if (native) launch<FMT, MODE, K, 128, true>(g, grid_per_row_tile * row_tiles, stream);
++    else launch<FMT, MODE, K, 128, false>(g, grid_per_row_tile * row_tiles, stream);
++  }
+ }
+ 
+-GemmArgs expert_args(const void* codes, const void* scales, const float* factors, const __nv_bfloat16* a,
++GemmArgs expert_args(const void* codes, const void* scales, const float* factors, const MoeAct& a,
+                      const MoeWork& w, __nv_bfloat16* out) {
+   GemmArgs g;
+   g.codes = static_cast<const uint8_t*>(codes);
+   g.scales = static_cast<const uint8_t*>(scales);
+   g.factors = factors;
+-  g.a = reinterpret_cast<const uint16_t*>(a);
++  g.a = reinterpret_cast<const uint16_t*>(a.bf16);
++  g.aq = a.q;
++  g.as = a.s;
+   g.w = w;
+   g.out = reinterpret_cast<uint16_t*>(out);
+   return g;
+@@ -307,16 +501,16 @@ GemmArgs expert_args(const void* codes, const void* scales, const float* factors
+ 
+ }  // namespace
+ 
+-void moe_gate_up(const MoeExperts& e, const __nv_bfloat16* x, int T, const MoeWork& w, __nv_bfloat16* act,
++void moe_gate_up(const MoeExperts& e, const MoeAct& x, int T, const MoeWork& w, __nv_bfloat16* act,
+                  cudaStream_t stream) {
+   const GemmArgs g = expert_args(e.w13, e.w13_scale, e.w13_factor, x, w, act);
+   if (e.fmt == 0) launch_rows<FMT_NVFP4, Mode::Up, kHidden>(g, moe_tile_rows(T), 2 * kInter / TN, moe_max_tiles(T), stream);
+   else launch_rows<FMT_MXFP8, Mode::Up, kHidden>(g, moe_tile_rows(T), 2 * kInter / TN, moe_max_tiles(T), stream);
+ }
+ 
+-void moe_down(const MoeExperts& e, const __nv_bfloat16* act, int T, const MoeWork& w, __nv_bfloat16* down,
++void moe_down(const MoeExperts& e, const MoeAct& x, int T, const MoeWork& w, __nv_bfloat16* down,
+               cudaStream_t stream) {
+-  const GemmArgs g = expert_args(e.w2, e.w2_scale, e.w2_factor, act, w, down);
++  const GemmArgs g = expert_args(e.w2, e.w2_scale, e.w2_factor, x, w, down);
+   if (e.fmt == 0) launch_rows<FMT_NVFP4, Mode::Down, kInter>(g, moe_tile_rows(T), kHidden / TN, moe_max_tiles(T), stream);
+   else launch_rows<FMT_MXFP8, Mode::Down, kInter>(g, moe_tile_rows(T), kHidden / TN, moe_max_tiles(T), stream);
+ }
+diff --git a/native/src/model/prefill.cpp b/native/src/model/prefill.cpp
+index 3194cd8..ea651b8 100644
+--- a/native/src/model/prefill.cpp
++++ b/native/src/model/prefill.cpp
+@@ -15,6 +15,7 @@
+ #include "kernels/prefill/prefill.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <stdexcept>
+ #include <string>
+ 
+@@ -81,6 +82,17 @@ Prefiller::Prefiller(const Weights& w, const Ablation& abl, int max_chunk, cudaS
+   gin_ = rel_;
+   fpre_ = reinterpret_cast<float*>(down_), gpre_ = fpre_ + C * H;
+   wscratch_ = w.dense_fp8 ? bf16(std::max(std::size_t(PROJ_ROWS_FULL) * H, std::size_t(H) * HEADS * HEAD_DIM)) : nullptr;
++  fp8_dense_ = w.dense_fp8 && std::getenv("INGINE_PREFILL_FP8_DENSE") != nullptr;
++  c32_ = fp8_dense_ ? f32(C * PROJ_ROWS_FULL) : nullptr;
++  fp4_moe_ = std::getenv("INGINE_PREFILL_FP4_MOE") != nullptr;
++  if (fp4_moe_) {
++    // activation quantization scratch: gate/up input [T, H] and down input [T*8, I], worst of both formats
++    // (NVFP4: K/2 + K/16 bytes per row; MXFP8: K + K/32) plus 16 bytes of tail-read slack
++    const std::size_t up_row = std::max<std::size_t>(HIDDEN / 2 + HIDDEN / 16, std::size_t(HIDDEN) + HIDDEN / 32);
++    const std::size_t dn_row = std::max<std::size_t>(INTER / 2 + INTER / 16, std::size_t(INTER) + INTER / 32);
++    moe_up_q_ = static_cast<std::uint8_t*>(alloc(C * up_row + 16));
++    moe_dn_q_ = static_cast<std::uint8_t*>(alloc(C * TOP_K * dn_row + 16));
++  }
+   ids_ = static_cast<std::int64_t*>(alloc(C * 8));
+   for (auto& b : storage_) b.fill(0);  // e.g. gathered sliding rows past ring + chunk: never keys, kept finite
+ }
+@@ -222,23 +234,41 @@ void Prefiller::run(State& st, const std::int32_t* tokens, int T, int pos0, floa
+ 
+     // ---- projections (fast.proj_layout): one GEMM for a single input, else per input segment
+     const int R = proj_rows(layer.full);
+-    const __nv_bfloat16* wp = bf16_rows(layer.wproj);
+     const bool single = !layer.full && !msgs;
+-    if (single) {
+-      gemm_->run(xin_, H, wp, H, proj_, R, false, T, R, H, s);
+-    } else {
+-      struct Part {
+-        int begin, end, input;
++    struct Part {
++      int begin, end, input;
++    };
++    const Part parts[] = {{SEG_BEGIN[SEG_Q], SEG_BEGIN[SEG_K], 0},
++                          {SEG_BEGIN[SEG_K], SEG_BEGIN[SEG_V], 1},
++                          {SEG_BEGIN[SEG_V], SEG_BEGIN[SEG_K_DYN], 2},
++                          {SEG_BEGIN[SEG_K_DYN], SEG_BEGIN[SEG_V_DYN], 1},
++                          {SEG_BEGIN[SEG_V_DYN], SEG_BEGIN[NUM_SEGS], 2}};
++    if (fp8_dense_) {
++      // checkpoint FP8 weight rows straight into the E4M3 x E4M3 GEMM (no dequant)
++      const std::uint8_t* wq = static_cast<const std::uint8_t*>(layer.wproj.w.data);
++      const float* wsc = f32p(layer.wproj.scale);
++      auto part_fp8 = [&](int input, int begin, int width) {
++        gemm_->run_fp8(xin_ + std::size_t(input) * slab, H, wq + std::size_t(begin) * H, wsc + begin, H,
++                       c32_ + begin, R, proj_ + begin, R, T, width, H, s);
+       };
+-      const Part parts[] = {{SEG_BEGIN[SEG_Q], SEG_BEGIN[SEG_K], 0},
+-                            {SEG_BEGIN[SEG_K], SEG_BEGIN[SEG_V], 1},
+-                            {SEG_BEGIN[SEG_V], SEG_BEGIN[SEG_K_DYN], 2},
+-                            {SEG_BEGIN[SEG_K_DYN], SEG_BEGIN[SEG_V_DYN], 1},
+-                            {SEG_BEGIN[SEG_V_DYN], SEG_BEGIN[NUM_SEGS], 2}};
+-      for (const Part& part : parts) {
+-        if (part.begin >= R) break;
+-        gemm_->run(xin_ + std::size_t(part.input) * slab, H, wp + std::size_t(part.begin) * H, H, proj_ + part.begin,
+-                   R, false, T, part.end - part.begin, H, s);
++      if (single) {
++        part_fp8(0, 0, R);
++      } else {
++        for (const Part& part : parts) {
++          if (part.begin >= R) break;
++          part_fp8(part.input, part.begin, part.end - part.begin);
++        }
++      }
++    } else {
++      const __nv_bfloat16* wp = bf16_rows(layer.wproj);
++      if (single) {
++        gemm_->run(xin_, H, wp, H, proj_, R, false, T, R, H, s);
++      } else {
++        for (const Part& part : parts) {
++          if (part.begin >= R) break;
++          gemm_->run(xin_ + std::size_t(part.input) * slab, H, wp + std::size_t(part.begin) * H, H,
++                     proj_ + part.begin, R, false, T, part.end - part.begin, H, s);
++        }
+       }
+     }
+ 
+@@ -282,8 +312,13 @@ void Prefiller::run(State& st, const std::int32_t* tokens, int T, int pos0, floa
+     pk::attention(at, s);
+ 
+     // ---- output projection + post-attention conv
+-    const __nv_bfloat16* wo = bf16_rows(layer.wo);
+-    gemm_->run(attn_out_, HEADS * HEAD_DIM, wo, HEADS * HEAD_DIM, wo_out_, H, false, T, H, HEADS * HEAD_DIM, s);
++    if (fp8_dense_) {
++      gemm_->run_fp8(attn_out_, HEADS * HEAD_DIM, layer.wo.w.data, f32p(layer.wo.scale), HEADS * HEAD_DIM, c32_, H,
++                     wo_out_, H, T, H, HEADS * HEAD_DIM, s);
++    } else {
++      const __nv_bfloat16* wo = bf16_rows(layer.wo);
++      gemm_->run(attn_out_, HEADS * HEAD_DIM, wo, HEADS * HEAD_DIM, wo_out_, H, false, T, H, HEADS * HEAD_DIM, s);
++    }
+     pk::static_conv(wo_out_, H, T, H, f32p(layer.attn_conv), st.conv_attn_at(v), y_, s);
+     pk::conv_state_update(st.conv_attn_at(v), wo_out_, H, T, H, s);
+ 
+@@ -312,8 +347,32 @@ void Prefiller::run(State& st, const std::int32_t* tokens, int T, int pos0, floa
+     const Experts& ex = layer.experts;
+     const pk::MoeExperts me{ex.fmt == ExpertFormat::NVFP4 ? 0 : 1, ex.w13.data, ex.w13_scale.data,
+                             f32p(ex.w13_factor), ex.w2.data, ex.w2_scale.data, f32p(ex.w2_factor)};
+-    pk::moe_gate_up(me, xm_, T, work, act_, s);
+-    pk::moe_down(me, act_, T, work, down_, s);
++    pk::MoeAct mup;
++    mup.bf16 = xm_;
++    if (fp4_moe_) {
++      // quantize the router input rows once per visit; the grouped GEMM gathers them by pair
++      if (ex.fmt == ExpertFormat::NVFP4)
++        pk::nvfp4_quant_rows(xm_, T, HIDDEN, moe_up_q_, moe_up_q_ + std::size_t(T) * (HIDDEN / 2), s);
++      else
++        pk::mxfp8_quant_rows(xm_, T, HIDDEN, moe_up_q_, moe_up_q_ + std::size_t(T) * HIDDEN, s);
++      mup.q = moe_up_q_;
++      mup.s = ex.fmt == ExpertFormat::NVFP4 ? moe_up_q_ + std::size_t(T) * (HIDDEN / 2)
++                                            : moe_up_q_ + std::size_t(T) * HIDDEN;
++    }
++    pk::moe_gate_up(me, mup, T, work, act_, s);
++    pk::MoeAct mdn;
++    mdn.bf16 = act_;
++    if (fp4_moe_) {
++      const int rows = T * TOP_K;
++      if (ex.fmt == ExpertFormat::NVFP4)
++        pk::nvfp4_quant_rows(act_, rows, INTER, moe_dn_q_, moe_dn_q_ + std::size_t(rows) * (INTER / 2), s);
++      else
++        pk::mxfp8_quant_rows(act_, rows, INTER, moe_dn_q_, moe_dn_q_ + std::size_t(rows) * INTER, s);
++      mdn.q = moe_dn_q_;
++      mdn.s = ex.fmt == ExpertFormat::NVFP4 ? moe_dn_q_ + std::size_t(rows) * (INTER / 2)
++                                            : moe_dn_q_ + std::size_t(rows) * INTER;
++    }
++    pk::moe_down(me, mdn, T, work, down_, s);
+     pk::moe_combine(down_, wts_, T, moe_sum_, s);
+     pk::static_conv(moe_sum_, H, T, H, f32p(layer.mlp_conv), st.conv_mlp_at(v), y2_, s);
+     pk::conv_state_update(st.conv_mlp_at(v), moe_sum_, H, T, H, s);
+diff --git a/native/src/model/prefill.h b/native/src/model/prefill.h
+index 40e310f..b1a3638 100644
+--- a/native/src/model/prefill.h
++++ b/native/src/model/prefill.h
+@@ -76,6 +76,10 @@ class Prefiller {
+   int4* tiles_;
+   __nv_bfloat16 *act_, *down_, *moe_sum_;
+   __nv_bfloat16* wscratch_;  // dequantized FP8 rows of wproj / wo (dense_fp8)
++  float* c32_;                // fp8 dense path: fp32 GEMM out [max_chunk, PROJ_ROWS_FULL]
++  bool fp8_dense_ = false;    // INGINE_PREFILL_FP8_DENSE: FP8 GEMMs for wproj / wo (dense_fp8 weights only)
++  bool fp4_moe_ = false;      // INGINE_PREFILL_FP4_MOE: native block-scaled MoE grouped GEMMs
++  std::uint8_t *moe_up_q_ = nullptr, *moe_dn_q_ = nullptr;  // quantized activations (codes + scales)
+   std::int64_t* ids_;
+   int kpos_rows_;
+ };
+-- 
+2.56.0
+

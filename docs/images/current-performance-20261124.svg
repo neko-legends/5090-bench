@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="960" viewBox="0 0 1600 960">
+<rect width="1600" height="960" fill="#0f141b"/>
+<text x="90" y="82" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="22" font-weight="600" letter-spacing="2">5090-BENCH  ·  2026-11-24</text>
+<text x="90" y="152" fill="#f4f7fa" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="50" font-weight="700">Inkling-2-Mini · RTX 5090 (400 W cap)</text>
+<text x="90" y="202" fill="#b8c7d9" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="24">Single RTX 5090 (32 GB, sm_120a) · ingine + lossless chunk-6144/tiles-112 · 262,144 ctx · abliterated</text>
+
+<rect x="90" y="246" width="1420" height="516" rx="16" fill="#171f2a" stroke="#263242" stroke-width="1.5"/>
+<text x="130" y="302" fill="#8ea3b8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="700" letter-spacing="1.5">MEASURED ON THE LIVE PRODUCTION CONFIG (n = 15 INTERLEAVED RUNS)</text>
+
+<text x="130" y="368" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="25" font-weight="600">Decode · concurrency 1 (speculative DSpark, threshold 0.8)</text>
+<text x="1470" y="368" fill="#f2cc7b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="42" font-weight="700" text-anchor="end">431.3 tok/s</text>
+<text x="130" y="400" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19">range 429.1–433.9 tok/s · ~92% of measured 400 W physics ceiling (397–473 tok/s) · TTFT 28.9 ms</text>
+
+<path d="M130 430 H1470" stroke="#283546" stroke-width="1.2"/>
+
+<text x="130" y="486" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="25" font-weight="600">Cold prefill · 4K prompt (3,302 tokens)</text>
+<text x="1470" y="486" fill="#6fd1f5" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="42" font-weight="700" text-anchor="end">11,154 tok/s</text>
+<text x="130" y="518" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19">+12.0% over stock chunk-3072 (9,955 tok/s) · byte-identical greedy output (sha256 verified)</text>
+
+<path d="M130 548 H1470" stroke="#283546" stroke-width="1.2"/>
+
+<text x="130" y="604" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="25" font-weight="600">Cold prefill · 32K / 131K prompts (25,554 / 102,557 tokens)</text>
+<text x="1470" y="604" fill="#7ce09b" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="42" font-weight="700" text-anchor="end">10,911 / 9,049 tok/s</text>
+<text x="130" y="636" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19">+2.5% at 32K · +4.6% at 131K over stock · peak VRAM 26.5 GiB (leaves ~5.5 GiB headroom)</text>
+
+<path d="M130 666 H1470" stroke="#283546" stroke-width="1.2"/>
+
+<text x="130" y="720" fill="#e2eaf3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="25" font-weight="600">Private vision · multimodal (same live server)</text>
+<text x="1470" y="720" fill="#c79bff" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="42" font-weight="700" text-anchor="end">0.33 s · 97.3%</text>
+<text x="130" y="748" fill="#9fb2c7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19">36/37 on internal vision bench · 4 s cold server boot · native thinking ON (effort 0.9)</text>
+
+<text x="90" y="814" fill="#edf2f7" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="23" font-weight="700">Why we did NOT ship the faster 14,593 tok/s FP4 MoE kernel</text>
+<text x="90" y="850" fill="#b7c5d3" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21">Native Blackwell FP4/MXFP8 MoE prefill hit +47% prefill (14.6k @4K), but failed our real role-bench quality gate:</text>
+<text x="90" y="882" fill="#f58a8a" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="21" font-weight="600">Builder dropped 66.7% → 33.3% and Reviewer dropped 100% → 66.7%. Speed without task quality stays OFF.</text>
+<text x="90" y="924" fill="#7f93a8" font-family="DejaVu Sans,Arial,Helvetica,sans-serif" font-size="19">Measured hardware ceilings at 400 W: 1,525.7 GB/s D2D · 238.1 TFLOPS BF16 · 757.8 TFLOPS FP8 · Receipts: results/inkling-2-mini-20261124/ledger.jsonl</text>
+</svg>
