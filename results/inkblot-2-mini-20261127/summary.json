@@ -1,0 +1,223 @@
+{
+  "experiment": "inkblot-2-mini-vs-inkling-2-mini",
+  "date": "2026-11-27",
+  "status": "promoted-2026-11-27 combined arm live",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5090 (32 GB, Blackwell sm_120a)",
+    "power_cap_w": 400
+  },
+  "engine": {
+    "name": "ingine",
+    "upstream_repo": "https://github.com/satellitedown/inkling-2-mini-abliterated-ingine",
+    "upstream_commit": "556acc7",
+    "patch": "models/inkling-2-mini/patches/0001-prefill-accept-prefill_chunk-6144-kAttnMaxTiles-112-.patch",
+    "prefill_chunk": 6144,
+    "k_attn_max_tiles": 112,
+    "lossless_patch": true,
+    "recurrence_passes": 3,
+    "design": "controlled same-binary, two-boot experiment"
+  },
+  "upstream_links": {
+    "base_model": "https://huggingface.co/thinkingmachines/Inkling-2-Mini",
+    "candidate_checkpoint": "https://huggingface.co/Ex0bit/Inkblot-2-mini/tree/fb0b924f46a74331e34ce4f4288177f9dc0383c8",
+    "candidate_repo": "https://huggingface.co/Ex0bit/Inkblot-2-mini",
+    "candidate_revision": "fb0b924",
+    "candidate_full_sha": "fb0b924f46a74331e34ce4f4288177f9dc0383c8",
+    "candidate_method": "https://github.com/eelbaz/Recursive-Self-Improving-Loopers",
+    "ablation_overlay": "https://huggingface.co/satellitedown/Inkling-2-Mini-abliterated-ingine",
+    "engine_pinned": "https://github.com/satellitedown/inkling-2-mini-abliterated-ingine/tree/556acc7"
+  },
+  "arms": [
+    {
+      "id": "incumbent",
+      "label": "Incumbent",
+      "description": "Stock Inkling-2-Mini + ablation overlay",
+      "base": "thinkingmachines/Inkling-2-Mini",
+      "overlay": true,
+      "code_csv2json": {
+        "passed": 0,
+        "total": 19,
+        "status": "empty",
+        "note": "Empty output at 16k budget and on 65k retry"
+      },
+      "synthesis": {
+        "input_tokens_approx": 50990,
+        "output_budget": 16000,
+        "fact_proxy_hits": 0,
+        "fact_proxy_total": 25,
+        "output_tokens": 0,
+        "status": "empty",
+        "note": "Empty output even on retry"
+      },
+      "hard_math": {
+        "passed": 40,
+        "total": 40
+      },
+      "vision": {
+        "passed": 36,
+        "total": 37,
+        "changed_images_passed": 16,
+        "changed_images_total": 16,
+        "cold_median_s": 0.39,
+        "note": "Missed same disputed OCR gold item"
+      },
+      "decode_tok_s": {
+        "boot_1": 423.1,
+        "boot_2": 424.4
+      },
+      "benign_refusal_check": {
+        "refusal_patterns": 0,
+        "prompts_tested": 20,
+        "scope": "benign prompts only"
+      }
+    },
+    {
+      "id": "plain",
+      "label": "Plain Inkblot",
+      "description": "Ex0bit/Inkblot-2-mini (fb0b924), no overlay",
+      "base": "Ex0bit/Inkblot-2-mini@fb0b924",
+      "overlay": false,
+      "code_csv2json": {
+        "passed": 19,
+        "total": 19,
+        "status": "pass",
+        "note": "All 19 unit tests passed"
+      },
+      "synthesis": {
+        "input_tokens_approx": 50990,
+        "output_budget": 16000,
+        "fact_proxy_hits": 25,
+        "fact_proxy_total": 25,
+        "output_tokens": 2022,
+        "status": "complete",
+        "note": "Completed cleanly in 2,022 output tokens"
+      },
+      "hard_math": {
+        "passed": 36,
+        "total": 40
+      },
+      "vision": {
+        "passed": 36,
+        "total": 37,
+        "changed_images_passed": 16,
+        "changed_images_total": 16,
+        "cold_median_s": 0.265,
+        "note": "Missed same disputed OCR gold item"
+      },
+      "decode_tok_s": {
+        "boot_1": 423.8,
+        "boot_2": 423.5
+      },
+      "benign_refusal_check": {
+        "refusal_patterns": 0,
+        "prompts_tested": 20,
+        "scope": "benign prompts only"
+      }
+    },
+    {
+      "id": "combined",
+      "label": "Inkblot + overlay",
+      "description": "Ex0bit/Inkblot-2-mini (fb0b924) + ablation overlay",
+      "base": "Ex0bit/Inkblot-2-mini@fb0b924",
+      "overlay": true,
+      "code_csv2json": {
+        "passed": 19,
+        "total": 19,
+        "status": "pass",
+        "note": "All 19 unit tests passed"
+      },
+      "synthesis": {
+        "input_tokens_approx": 50990,
+        "output_budget": 16000,
+        "fact_proxy_hits": 21,
+        "fact_proxy_total": 25,
+        "output_tokens": 16000,
+        "status": "truncated",
+        "note": "Truncated at 16,000 output tokens twice"
+      },
+      "hard_math": {
+        "passed": 38,
+        "total": 40
+      },
+      "vision": {
+        "passed": 36,
+        "total": 37,
+        "changed_images_passed": 16,
+        "changed_images_total": 16,
+        "cold_median_s": 0.256,
+        "note": "Missed same disputed OCR gold item"
+      },
+      "decode_tok_s": {
+        "boot_1": 410.5,
+        "boot_2": 409.8
+      },
+      "benign_refusal_check": {
+        "refusal_patterns": 0,
+        "prompts_tested": 20,
+        "scope": "benign prompts only"
+      }
+    }
+  ],
+  "pending_followups": [
+    "400,000-token context qualification on the 5090 and on the pinned Radeon (256K is the current 5090 window, 131K on the Radeon)",
+    "Adversarial refusal comparison (benign controls only so far)",
+    "4-pass loop depth (3 passes evaluated only)"
+  ],
+  "cutover": {
+    "date": "2026-11-27",
+    "arm": "combined",
+    "method": "weights directory plus ablation overlay swapped in the serving config; same binary, same flags, same model id (no client change)",
+    "rollback": "verified snapshot of the pre-cutover serving config; restore file then restart",
+    "verified_after_cutover": {
+      "thinking_on_by_default": true,
+      "thinking_evidence": "reasoning present with no reasoning_effort field sent; 53 completion tok, 121 reasoning chars, correct answer",
+      "reasoning_replay_multiturn": true,
+      "vision_live": {
+        "cases": 8,
+        "correct": 8,
+        "backend": "ripper-5090",
+        "fallback_calls": 0
+      },
+      "worker_smoke": "synthetic CSV to JSON task completed; artifact re-run by the operator",
+      "benign_controls": "5/5 substantive, 0 refusal patterns",
+      "power_cap_w": 400,
+      "lossless_path_active": true
+    },
+    "limits": {
+      "note": "one shared context pool: input plus thinking plus answer",
+      "engine_context": 262144,
+      "generation_reserve_tokens": 8,
+      "max_input_tokens_at_min_output": 262135,
+      "max_output_tokens_at_51k_input": 211146,
+      "engine_clamps_oversized_max_tokens": "yes, never rejects",
+      "cli_default_max_tokens": 65536,
+      "max_tokens_is_a_ceiling_not_a_cap": "the CLI sends a ceiling and the engine clamps to remaining room; no artificial per-request cap was added"
+    },
+    "larger_budget_result": {
+      "fixture": "same ~50,990-token synthesis prompt",
+      "budgets_tested": [
+        16000,
+        32768,
+        65536
+      ],
+      "fact_proxy_hits_each": [
+        21,
+        21,
+        21
+      ],
+      "finish_each": [
+        "length",
+        "length",
+        "length"
+      ],
+      "wall_s_each": [
+        31.0,
+        49.8,
+        100.9
+      ],
+      "outputs_are_strict_prefixes": true,
+      "useful_content_ends_at_chars": 1955,
+      "conclusion": "recall saturates at 21/25; extra budget is consumed by a ticket-number repetition loop, so the per-request synthesis budget stays 16000"
+    }
+  }
+}
