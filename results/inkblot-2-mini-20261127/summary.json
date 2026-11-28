@@ -1,0 +1,166 @@
+{
+  "experiment": "inkblot-2-mini-vs-inkling-2-mini",
+  "date": "2026-11-27",
+  "status": "candidate-evaluation-cutover-pending",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5090 (32 GB, Blackwell sm_120a)",
+    "power_cap_w": 400
+  },
+  "engine": {
+    "name": "ingine",
+    "upstream_repo": "https://github.com/satellitedown/inkling-2-mini-abliterated-ingine",
+    "upstream_commit": "556acc7",
+    "patch": "models/inkling-2-mini/patches/0001-prefill-accept-prefill_chunk-6144-kAttnMaxTiles-112-.patch",
+    "prefill_chunk": 6144,
+    "k_attn_max_tiles": 112,
+    "lossless_patch": true,
+    "recurrence_passes": 3,
+    "design": "controlled same-binary, two-boot experiment"
+  },
+  "upstream_links": {
+    "base_model": "https://huggingface.co/thinkingmachines/Inkling-2-Mini",
+    "candidate_checkpoint": "https://huggingface.co/Ex0bit/Inkblot-2-mini/tree/fb0b924f46a74331e34ce4f4288177f9dc0383c8",
+    "candidate_repo": "https://huggingface.co/Ex0bit/Inkblot-2-mini",
+    "candidate_revision": "fb0b924",
+    "candidate_full_sha": "fb0b924f46a74331e34ce4f4288177f9dc0383c8",
+    "candidate_method": "https://github.com/eelbaz/Recursive-Self-Improving-Loopers",
+    "ablation_overlay": "https://huggingface.co/satellitedown/Inkling-2-Mini-abliterated-ingine",
+    "engine_pinned": "https://github.com/satellitedown/inkling-2-mini-abliterated-ingine/tree/556acc7"
+  },
+  "arms": [
+    {
+      "id": "incumbent",
+      "label": "Incumbent",
+      "description": "Stock Inkling-2-Mini + ablation overlay",
+      "base": "thinkingmachines/Inkling-2-Mini",
+      "overlay": true,
+      "code_csv2json": {
+        "passed": 0,
+        "total": 19,
+        "status": "empty",
+        "note": "Empty output at 16k budget and on 65k retry"
+      },
+      "synthesis": {
+        "input_tokens_approx": 50990,
+        "output_budget": 16000,
+        "fact_proxy_hits": 0,
+        "fact_proxy_total": 25,
+        "output_tokens": 0,
+        "status": "empty",
+        "note": "Empty output even on retry"
+      },
+      "hard_math": {
+        "passed": 40,
+        "total": 40
+      },
+      "vision": {
+        "passed": 36,
+        "total": 37,
+        "changed_images_passed": 16,
+        "changed_images_total": 16,
+        "cold_median_s": 0.390,
+        "note": "Missed same disputed OCR gold item"
+      },
+      "decode_tok_s": {
+        "boot_1": 423.1,
+        "boot_2": 424.4
+      },
+      "benign_refusal_check": {
+        "refusal_patterns": 0,
+        "prompts_tested": 20,
+        "scope": "benign prompts only"
+      }
+    },
+    {
+      "id": "plain",
+      "label": "Plain Inkblot",
+      "description": "Ex0bit/Inkblot-2-mini (fb0b924), no overlay",
+      "base": "Ex0bit/Inkblot-2-mini@fb0b924",
+      "overlay": false,
+      "code_csv2json": {
+        "passed": 19,
+        "total": 19,
+        "status": "pass",
+        "note": "All 19 unit tests passed"
+      },
+      "synthesis": {
+        "input_tokens_approx": 50990,
+        "output_budget": 16000,
+        "fact_proxy_hits": 25,
+        "fact_proxy_total": 25,
+        "output_tokens": 2022,
+        "status": "complete",
+        "note": "Completed cleanly in 2,022 output tokens"
+      },
+      "hard_math": {
+        "passed": 36,
+        "total": 40
+      },
+      "vision": {
+        "passed": 36,
+        "total": 37,
+        "changed_images_passed": 16,
+        "changed_images_total": 16,
+        "cold_median_s": 0.265,
+        "note": "Missed same disputed OCR gold item"
+      },
+      "decode_tok_s": {
+        "boot_1": 423.8,
+        "boot_2": 423.5
+      },
+      "benign_refusal_check": {
+        "refusal_patterns": 0,
+        "prompts_tested": 20,
+        "scope": "benign prompts only"
+      }
+    },
+    {
+      "id": "combined",
+      "label": "Inkblot + overlay",
+      "description": "Ex0bit/Inkblot-2-mini (fb0b924) + ablation overlay",
+      "base": "Ex0bit/Inkblot-2-mini@fb0b924",
+      "overlay": true,
+      "code_csv2json": {
+        "passed": 19,
+        "total": 19,
+        "status": "pass",
+        "note": "All 19 unit tests passed"
+      },
+      "synthesis": {
+        "input_tokens_approx": 50990,
+        "output_budget": 16000,
+        "fact_proxy_hits": 21,
+        "fact_proxy_total": 25,
+        "output_tokens": 16000,
+        "status": "truncated",
+        "note": "Truncated at 16,000 output tokens twice"
+      },
+      "hard_math": {
+        "passed": 38,
+        "total": 40
+      },
+      "vision": {
+        "passed": 36,
+        "total": 37,
+        "changed_images_passed": 16,
+        "changed_images_total": 16,
+        "cold_median_s": 0.256,
+        "note": "Missed same disputed OCR gold item"
+      },
+      "decode_tok_s": {
+        "boot_1": 410.5,
+        "boot_2": 409.8
+      },
+      "benign_refusal_check": {
+        "refusal_patterns": 0,
+        "prompts_tested": 20,
+        "scope": "benign prompts only"
+      }
+    }
+  ],
+  "pending_followups": [
+    "Larger-budget rerun (synthesis beyond 16k output cap and extended budget checks)",
+    "Default-thinking verification",
+    "Production cutover decision (incumbent remains live until follow-ups land)"
+  ]
+}
