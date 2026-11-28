@@ -81,9 +81,9 @@ def main() -> None:
             "Long Synthesis",
             "~50,990 in · 16k out cap (25 facts)",
             [
-                ("incumbent", inc["synthesis"]["fact_proxy_hits"], inc["synthesis"]["fact_proxy_total"], "empty even at retry", True),
+                ("incumbent", inc["synthesis"]["fact_proxy_hits"], inc["synthesis"]["fact_proxy_total"], "empty even at a 65,536 retry", True),
                 ("plain", pln["synthesis"]["fact_proxy_hits"], pln["synthesis"]["fact_proxy_total"], f"{pln['synthesis']['output_tokens']:,} out tok", False),
-                ("combined", cmb["synthesis"]["fact_proxy_hits"], cmb["synthesis"]["fact_proxy_total"], "truncated @ 16,000 ×2", True),
+                ("combined", cmb["synthesis"]["fact_proxy_hits"], cmb["synthesis"]["fact_proxy_total"], "▲ truncated at 16,000 ×2 — hit the cap", True),
             ],
         ),
         (
@@ -298,7 +298,7 @@ def main() -> None:
         f'<text x="86" y="{foot_y + 29}" fill="#cbd5e1" font-family="{FONT}" font-size="16"><tspan font-weight="700" fill="#e2eaf3">Refusal check:</tspan> 0/20 refusal patterns across all 3 arms on 20 benign prompts (no evidence of broad refusal; not an adversarial red-team eval).</text>'
     )
     p.append(
-        f'<text x="86" y="{foot_y + 55}" fill="#9fb2c7" font-family="{FONT}" font-size="16"><tspan font-weight="700" fill="#fcd34d">Pending separately:</tspan> larger-budget rerun, default-thinking verification, and cutover decision.  ·  Data: results/inkblot-2-mini-20261127/summary.json</text>'
+        f'<text x="86" y="{foot_y + 55}" fill="#9fb2c7" font-family="{FONT}" font-size="16"><tspan font-weight="700" fill="#86efac">Now live (combined):</tspan> larger-budget rerun saturated at 21/25 on 16k/32.8k/65.5k, thinking on by default verified, 8/8 live vision with zero fallback.  ·  Data: results/inkblot-2-mini-20261127/summary.json</text>'
     )
 
     p.append("</svg>")

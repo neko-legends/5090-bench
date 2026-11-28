@@ -39,12 +39,12 @@ One 32 GB Blackwell card. Every model we benchmark on it gets a lane, a dated co
 | | Lane | Status | Best verified numbers (400 W cap) | Role fit |
 | :-: | --- | --- | --- | --- |
 | ⚡ | **[Inkling-2-Mini (abliterated) · `ingine` + chunk-6144](models/inkling-2-mini/README.md)** | 🟢 **live** since 2026-11-24 | **431.3 tok/s c1 decode** · **11,154 / 10,911 / 9,049 tok/s** cold prefill (4K/32K/131K) · **28.9 ms TTFT** · **0.33 s vision (97.3%)** · 262K ctx · 26.5 GiB VRAM | **Private vision, Reviewer (100% @ 4.8 s), Cheap-batch (100% @ 2.4 s)**. *Not* a replacement for large MoE on long-form synthesis/builder (loops at temp 0 on 3/14 fixtures). |
-| 🧪 | **[Ex0bit/Inkblot-2-mini (`fb0b924`) · `ingine` + chunk-6144](models/inkblot-2-mini/README.md)** | 🧪 **candidate** (2026-11-27 · cutover pending) | Plain: **423.8 / 423.5 tok/s** (2 boots) · **19/19 `csv2json`** · **25/25 synthesis** (2,022 tok) · **36/40 hard math** · **36/37 vision @ 0.265 s** (3 passes, 400 W) | **Fixes `csv2json` & ~51K synthesis empty-output failures** vs incumbent while keeping decode parity; trails incumbent on 40-item hard math (36/40 vs 40/40). Larger-budget rerun, default-thinking check & cutover pending. |
+| ✅ | **[Ex0bit/Inkblot-2-mini (`fb0b924`) + overlay · `ingine` + chunk-6144](models/inkblot-2-mini/README.md)** | 🟢 **live** since 2026-11-27 (Combined arm) | **19/19 `csv2json`** (incumbent: empty) · **38/40 hard math** · **36/37 vision @ 0.256 s** · **409.8–410.5 tok/s** (2 boots) · thinking on by default | **Fixes the incumbent's empty-output loops on tested code while keeping the abliteration overlay.** Costs ~3.2% decode and still truncates on ~51K synthesis at a 16k budget. |
 | 🔬 | [Inkling-2-Mini · `ingine` + native FP4 MoE prefill](models/inkling-2-mini/README.md#what-we-tested-and-rejected-and-why) | 🔴 **rejected** (quality) | **14,593 / 13,918 / 10,974 tok/s** prefill (+47% / +31% / +27%) · **23.9 ms TTFT** · 4/4 needles @ 131K | **Failed role-bench quality gate** (Builder 33.3%, Reviewer 66.7%). Patches kept in repo as a cautionary receipt, disabled in production. |
 
 ---
 
-## 🧪 Candidate Evaluation (2026-11-27): `Ex0bit/Inkblot-2-mini` (`fb0b924`)
+## ✅ Now live (2026-11-27): `Ex0bit/Inkblot-2-mini` (`fb0b924`) + overlay
 
 We ran a controlled **same-binary, two-boot** comparison on the same 400 W RTX 5090 (`ingine` [`556acc7`](https://github.com/satellitedown/inkling-2-mini-abliterated-ingine/tree/556acc7) + lossless `chunk-6144 / tiles-112`, **3 passes**) across three arms: **Incumbent** (stock Inkling-2-Mini + ablation overlay), **Plain** ([`Ex0bit/Inkblot-2-mini` @ `fb0b924`](https://huggingface.co/Ex0bit/Inkblot-2-mini/tree/fb0b924f46a74331e34ce4f4288177f9dc0383c8)), and **Combined** (Inkblot + ablation overlay).
 
@@ -63,7 +63,9 @@ We ran a controlled **same-binary, two-boot** comparison on the same 400 W RTX 5
 
 - **Key read:** Plain `Inkblot-2-mini` eliminates the incumbent's empty-output failures on `csv2json` and ~51K synthesis (2,022 output tokens, 25/25 fact proxy) with decode parity and faster cold vision median (0.265 s vs 0.390 s), while trailing the incumbent on the 40-problem hard math set (36/40 vs 40/40). Adding the ablation overlay (`Combined`) recovers +2 math items (38/40) but truncates synthesis at 16k twice (21/25) and costs ~3.2% decode throughput.
 - **Fair scope:** All three arms missed the same disputed OCR gold item on vision; the 20-prompt refusal check used benign prompts only (no evidence of broad refusal, not an adversarial eval); tested at 3 passes only.
-- **Pending separately:** Larger-budget rerun, default-thinking verification, and cutover decision — incumbent remains live until follow-up measurements land.
+- **Follow-ups after this table:** the larger-budget rerun (same prompt at 16k / 32.8k / 65.5k output) **saturated at 21/25 facts on every budget** with outputs as strict prefixes — the extra budget is eaten by a ticket-number loop, so the benchmark budget stays 16,000. Default thinking and multi-turn `reasoning_content` replay were verified on the live endpoint, vision was re-proven live at **8/8 with zero fallback**, and the Combined arm was **cut over** with a verified rollback snapshot. Same binary, same flags, same 400 W cap, same served model id. `max_tokens` is a ceiling, not a cap: the engine clamps to the room left in the shared window.
+- **Live limits measured:** context 262,144 shared (input + thinking + answer); max input 262,135 at minimum output; max output at the 51k prompt 211,146; oversized requests clamped, never rejected.
+- **Still open:** 400,000-token context qualification on this card and on our AMD card, an adversarial refusal comparison, and 4-pass loop depth.
 
 Full report: **[`models/inkblot-2-mini/README.md`](models/inkblot-2-mini/README.md)** · Aggregates: **[`results/inkblot-2-mini-20261127/summary.json`](results/inkblot-2-mini-20261127/summary.json)**
 

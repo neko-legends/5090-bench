@@ -1,6 +1,6 @@
 # Inkblot-2-mini (`fb0b924`) vs. Incumbent Inkling-2-Mini on RTX 5090
 
-**Status:** 🧪 **candidate evaluation** (2026-11-27 — larger-budget rerun, default-thinking verification, and production cutover pending separately; incumbent remains live)  
+**Status:** ✅ **live since 2026-11-27** — promoted as the *Combined* arm (Inkblot + ablation overlay). Default thinking verified, live vision proven, real limits measured, rollback snapshot kept.  
 **Candidate checkpoint:** [`Ex0bit/Inkblot-2-mini` @ `fb0b924`](https://huggingface.co/Ex0bit/Inkblot-2-mini/tree/fb0b924f46a74331e34ce4f4288177f9dc0383c8) (method & paper: [`eelbaz/Recursive-Self-Improving-Loopers`](https://github.com/eelbaz/Recursive-Self-Improving-Loopers) by Eric E., Tensorbend.ai Research)  
 **Base model:** [`thinkingmachines/Inkling-2-Mini`](https://huggingface.co/thinkingmachines/Inkling-2-Mini)  
 **Engine & overlay:** [`satellitedown/inkling-2-mini-abliterated-ingine` @ `556acc7`](https://github.com/satellitedown/inkling-2-mini-abliterated-ingine/tree/556acc7) + lossless patch [`0001`](../inkling-2-mini/patches/0001-prefill-accept-prefill_chunk-6144-kAttnMaxTiles-112-.patch) (`prefill_chunk=6144 / kAttnMaxTiles=112`), ablation overlay [`satellitedown/Inkling-2-Mini-abliterated-ingine`](https://huggingface.co/satellitedown/Inkling-2-Mini-abliterated-ingine)  
@@ -73,8 +73,25 @@ This evaluation compares three model configurations in a **controlled same-binar
 
 ## Pending Separately (Do Not Treat as Final Cutover)
 
-Production serving stays on the incumbent ([`models/inkling-2-mini/README.md`](../inkling-2-mini/README.md)) until the remaining checks complete:
+**Done — this is now the live configuration.** The three follow-ups ran:
 
-- **Larger-budget rerun** (testing synthesis beyond the 16k cap and extended budgets)
-- **Default-thinking verification**
-- **Production cutover decision** based on the completed follow-up measurements
+- **Larger-budget rerun** (same ~50,990-token prompt at 16k / 32.8k / 65.5k output) — fact recall **saturated at 21/25 on all three budgets**, outputs strict prefixes of each other, and the useful summary ends after ~1,955 chars; the rest is a ticket-number repetition loop. Extra budget costs latency (31 s → 50 s → 101 s) and buys no recall, so the per-request synthesis budget stays 16,000.
+- **Default thinking verified** — the live endpoint emits reasoning **with no `reasoning_effort` field sent**, and an explicit `effort=none` still reasons (template default is always-on). Multi-turn replay of `reasoning_content` verified over three turns.
+- **Cutover** — weights directory + overlay swapped in the serving config; same binary, same flags, same 400 W cap, same served model id (no client change), rollback snapshot verified restorable.
+
+Post-cutover live checks: 8/8 vision cases correct on `ripper-5090` with **0 fallback calls**, a real worker smoke task that wrote a correct parser, 5/5 benign prompts answered with zero refusal patterns.
+
+### Token limits (measured, not assumed)
+
+Context is **one shared pool**: input + thinking + answer.
+
+| Quantity | Value |
+|---|---|
+| Engine context | 262,144 |
+| Generation reserve (speculative verify) | 8 tokens |
+| Max input at minimum output | **262,135** (262,136 → 500 at the engine) |
+| Max output at the 51k synthesis prompt | 211,146 |
+| Oversized `max_tokens` | clamped to remaining room, never rejected |
+| CLI default `max_tokens` | 65,536 |
+
+`max_tokens` is a **ceiling**, not a cap: the CLI sends the ceiling and the engine clamps to the room actually left. No artificial per-request limit was added for normal chat or worker use. The 16,000 figure below is a *benchmark* budget.
